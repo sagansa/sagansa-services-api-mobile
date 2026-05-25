@@ -1,0 +1,20 @@
+{
+  "name": "api-mobile",
+  "version": "1.0.0",
+  "description": "Mobile API for SAGANSA platform",
+  "scripts": {
+    "dev": "php artisan serve --port=8001",
+    "start": "php artisan serve --port=8001 --host=0.0.0.0",
+    "build": "echo 'No build step required for Laravel API'",
+    "test": "php artisan test",
+    "lint": "php-cs-fixer fix --dry-run"
+  },
+  "keywords": [
+    "laravel",
+    "api",
+    "mobile",
+    "sagansa"
+  ],
+  "author": "SAGANSA Team",
+  "license": "MIT"
+}
