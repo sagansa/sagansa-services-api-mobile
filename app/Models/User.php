@@ -135,7 +135,7 @@ class User extends Authenticatable
 
     public function approvedLeaveRequests()
     {
-        return $this->hasMany(LeaveRequest::class, 'approved_by', 'uuid');
+        return $this->hasMany(LeaveRequest::class, 'approved_by_id', 'uuid');
     }
 
     public function printers()

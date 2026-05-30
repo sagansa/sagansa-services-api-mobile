@@ -41,15 +41,12 @@ class AuthController extends Controller
 
         $plainTextToken = $user->createToken('api-mobile')->plainTextToken;
         
-        // Get user permissions
-        $permissions = $user->getAllPermissions()->pluck('name')->toArray();
-
         return response()->json([
             'success' => true,
             'message' => 'Login berhasil',
             'user' => $this->transformUser($user),
             'roles' => [],
-            'permissions' => $permissions,
+            'permissions' => [],
             'token' => $plainTextToken,
             'token_type' => 'Bearer',
         ]);

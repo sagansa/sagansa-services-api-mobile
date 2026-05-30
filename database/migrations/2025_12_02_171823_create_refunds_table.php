@@ -30,7 +30,8 @@ return new class extends Migration
             // Foreign keys
             $table->foreign('tenant_id')->references('id')->on('tenants')->onDelete('cascade');
             $table->foreign('order_id')->references('id')->on('orders')->onDelete('cascade');
-            $table->foreign('refunded_by')->references('id')->on('users')->onDelete('restrict');
+            // refunded_by points to sagansa_user.users.uuid, which lives outside sagansa_ops.
+            $table->index('refunded_by');
 
             // Indexes
             $table->index('tenant_id');

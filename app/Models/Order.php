@@ -18,6 +18,8 @@ class Order extends Model
         'created_by',
         'customer_id',
         'customer_name',
+        'customer_email',
+        'customer_phone',
         'table_code',
         'status',
         'subtotal',
@@ -82,7 +84,7 @@ class Order extends Model
 
     public function creator()
     {
-        return $this->belongsTo(User::class, 'created_by');
+        return $this->belongsTo(User::class, 'created_by', 'uuid');
     }
 
     public function paymentType()

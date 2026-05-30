@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Tenant;
 use App\Models\Store;
 use App\Models\Product;
+use App\Models\PaymentMethod;
+use App\Models\CustomerType;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -99,17 +101,66 @@ class PublicController extends Controller
             ])
             ->get()
             ->map(function($product) {
-                $storePrice = $product->stores->first();
-                if ($storePrice && $storePrice->pivot && $storePrice->pivot->price) {
-                    $product->price = $storePrice->pivot->price;
+                $storeProduct = $product->stores->first();
+                $pivot = $storeProduct?->pivot;
+                $storePrice = $pivot?->price;
+
+                if ($storePrice !== null) {
+                    $product->price = (int) $storePrice;
                 }
+
+                $stock = $product->stock;
+                $tracksStock = $product->remaining === true;
+                $hasStock = !$tracksStock || (int) $stock > 0;
+                $isAvailable = $product->is_active && $hasStock;
+
+                $product->setAttribute('isAvailable', $isAvailable);
+                $product->setAttribute('stock', $stock);
+
                 unset($product->stores);
+
                 return $product;
             });
 
         return response()->json([
             'success' => true,
             'data' => $products
+        ]);
+    }
+
+    /**
+     * Get active payment methods for customer menu checkout.
+     */
+    public function paymentMethods(Request $request): JsonResponse
+    {
+        $storeId = $request->query('store_id');
+
+        if (!$storeId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Store ID is required'
+            ], 400);
+        }
+
+        $customerTypePaymentMethodIds = CustomerType::query()
+            ->where('store_id', $storeId)
+            ->where('is_active', true)
+            ->where('auto_payment', true)
+            ->whereNotNull('linked_payment_method_id')
+            ->pluck('linked_payment_method_id');
+
+        $paymentMethods = PaymentMethod::query()
+            ->where('store_id', $storeId)
+            ->where('is_active', true)
+            ->where('type', '!=', 'cash')
+            ->whereNotIn('id', $customerTypePaymentMethodIds)
+            ->orderByDesc('is_default')
+            ->orderBy('name')
+            ->get(['id', 'store_id', 'type', 'name', 'is_active', 'require_proof', 'details']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $paymentMethods,
         ]);
     }
 }

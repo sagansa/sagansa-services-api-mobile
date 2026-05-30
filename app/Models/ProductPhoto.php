@@ -69,7 +69,7 @@ class ProductPhoto extends Model
 
     public function uploadedBy()
     {
-        return $this->belongsTo(User::class, 'uploaded_by');
+        return $this->belongsTo(User::class, 'uploaded_by', 'uuid');
     }
 
     /**
@@ -126,3 +126,4 @@ class ProductPhoto extends Model
         // Set this photo as primary
         $this->update(['is_primary' => true]);
     }
+}

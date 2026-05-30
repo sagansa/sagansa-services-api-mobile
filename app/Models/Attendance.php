@@ -48,7 +48,7 @@ class Attendance extends Model
 
     public function user()
     {
-        return $this->belongsTo(User::class, 'created_by_id');
+        return $this->belongsTo(User::class, 'created_by_id', 'uuid');
     }
 
     public function store()

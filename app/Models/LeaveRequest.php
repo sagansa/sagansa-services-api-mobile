@@ -48,7 +48,7 @@ class LeaveRequest extends Model
 
     public function user()
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class, 'user_id', 'uuid');
     }
 
     public function tenant()
@@ -58,7 +58,7 @@ class LeaveRequest extends Model
 
     public function approver()
     {
-        return $this->belongsTo(User::class, 'approved_by_id');
+        return $this->belongsTo(User::class, 'approved_by_id', 'uuid');
     }
 
     public function scopeByUser($query, $userId)

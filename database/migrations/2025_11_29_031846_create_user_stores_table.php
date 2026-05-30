@@ -16,8 +16,8 @@ return new class extends Migration
             $table->uuid('store_id');
             $table->timestamps();
 
-            // Foreign keys
-            $table->foreign('user_id')->references('id')->on('users')->onDelete('cascade');
+            // user_id points to sagansa_user.users.uuid, which lives outside sagansa_ops.
+            $table->index('user_id');
             $table->foreign('store_id')->references('id')->on('stores')->onDelete('cascade');
 
             // Composite primary key

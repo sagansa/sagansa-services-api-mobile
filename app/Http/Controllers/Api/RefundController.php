@@ -147,7 +147,10 @@ class RefundController extends Controller
             }
 
             // Process refund in transaction
-            $refund = DB::transaction(function () use ($order, $request, $validatedItems, $totalRefundAmount) {
+            $user = $request->user();
+            $userKey = (string) ($user->uuid ?: $user->id);
+
+            $refund = DB::transaction(function () use ($order, $request, $validatedItems, $totalRefundAmount, $userKey) {
                 // Create refund record
                 $refund = Refund::create([
                     'tenant_id' => $order->tenant_id,
@@ -159,7 +162,7 @@ class RefundController extends Controller
                     'total_amount' => $totalRefundAmount,
                     'reason' => $request->reason,
                     'notes' => $request->notes,
-                    'refunded_by' => auth()->id(),
+                    'refunded_by' => $userKey,
                     'refunded_at' => now(),
                     'payment_method' => $request->payment_method ?? 'cash',
                     'status' => Refund::STATUS_COMPLETED,

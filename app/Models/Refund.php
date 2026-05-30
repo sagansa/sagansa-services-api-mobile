@@ -78,7 +78,7 @@ class Refund extends Model
 
     public function refundedBy()
     {
-        return $this->belongsTo(User::class, 'refunded_by');
+        return $this->belongsTo(User::class, 'refunded_by', 'uuid');
     }
 
     /**

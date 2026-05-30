@@ -81,6 +81,11 @@ class Product extends Model
         return $this->belongsTo(Tenant::class);
     }
 
+    public function user()
+    {
+        return $this->belongsTo(User::class, 'user_id', 'uuid');
+    }
+
     public function category()
     {
         return $this->belongsTo(Category::class);

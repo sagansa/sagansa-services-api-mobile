@@ -41,15 +41,15 @@ class CategoryController extends Controller
             
             if (!$hasAccess) {
                 // Check if user has access-pos role in this tenant
-                $allowedRoles = \Illuminate\Support\Facades\DB::table('roles')
+                $allowedRoles = \Illuminate\Support\Facades\DB::connection('mysql_auth')->table('roles')
                     ->join('role_has_permissions', 'roles.id', '=', 'role_has_permissions.role_id')
                     ->join('permissions', 'role_has_permissions.permission_id', '=', 'permissions.id')
                     ->where('permissions.name', 'access-pos')
                     ->pluck('roles.name')
                     ->toArray();
 
-                $hasRole = \Illuminate\Support\Facades\DB::table('tenant_user')
-                    ->where('user_id', $user->id)
+                $hasRole = \Illuminate\Support\Facades\DB::connection('mysql_auth')->table('tenant_user')
+                    ->where('user_id', $user->uuid)
                     ->where('tenant_id', $store->tenant_id)
                     ->whereIn('role', $allowedRoles)
                     ->exists();

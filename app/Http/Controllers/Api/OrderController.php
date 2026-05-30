@@ -22,6 +22,7 @@ class OrderController extends Controller
     public function store(Request $request): JsonResponse
     {
         $user = $request->user();
+        $userKey = (string) ($user->uuid ?: $user->id);
         
         $request->validate([
             'store_id' => 'required|exists:stores,id',
@@ -104,7 +105,7 @@ class OrderController extends Controller
             $order = Order::create([
                 'tenant_id' => $store->tenant_id, // Use store's tenant_id for cross-tenant support
                 'store_id' => $request->store_id,
-                'created_by' => $user->id,
+                'created_by' => $userKey,
                 'customer_id' => $request->customer_id,
                 'customer_name' => $request->customer_name,
                 'table_code' => $request->table_code,
@@ -162,6 +163,12 @@ class OrderController extends Controller
                 ]);
             }
 
+            if ($request->order_type === 'dine-in' && $request->table_id && $request->status === 'completed') {
+                \App\Models\Table::where('id', $request->table_id)
+                    ->where('store_id', $request->store_id)
+                    ->update(['is_available' => true]);
+            }
+
             // Update inventory (simplified);
 
             DB::commit();
@@ -208,7 +215,7 @@ class OrderController extends Controller
         
         // Log debug info
         \Log::info('OrderController::index', [
-            'user_id' => $user->id,
+            'user_id' => $user->uuid ?: $user->id,
             'user_tenant_id' => $user->tenant_id,
             'request_store_id' => $request->store_id,
         ]);
@@ -237,7 +244,7 @@ class OrderController extends Controller
         // Bypass TenantScope to support cross-tenant access
         $order = Order::withoutGlobalScope('tenant')
             ->where('id', $orderId)
-            ->with(['orderItems', 'creator', 'payments', 'customer'])
+            ->with(['orderItems', 'payments', 'customer'])
             ->first();
 
         if (!$order) {
