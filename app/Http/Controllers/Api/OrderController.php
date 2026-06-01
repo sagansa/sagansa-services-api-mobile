@@ -9,6 +9,7 @@ use App\Models\OrderItemModification;
 use App\Models\Store;
 use App\Models\Product;
 use App\Models\ProductVariant;
+use App\Models\ProductPrice;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -131,6 +132,27 @@ class OrderController extends Controller
 
             // Create order items with JSON snapshots
             foreach ($request->order_items as $itemData) {
+                if ($request->customer_type_id && !empty($itemData['product_id']) && empty($itemData['product_variant_id'])) {
+                    $channelPrice = ProductPrice::where('store_id', $request->store_id)
+                        ->where('product_id', $itemData['product_id'])
+                        ->where('customer_type_id', $request->customer_type_id)
+                        ->whereNull('variant_id')
+                        ->where('is_active', true)
+                        ->value('price');
+
+                    if ($channelPrice !== null) {
+                        $modificationsTotal = collect($itemData['modifications'] ?? [])
+                            ->sum(fn ($modification) => (float) ($modification['price'] ?? 0));
+                        $itemData['unit_price'] = (float) $channelPrice + $modificationsTotal;
+                        $itemData['total_price'] = $itemData['unit_price'] * (int) $itemData['quantity'];
+
+                        if (isset($itemData['product']) && is_array($itemData['product'])) {
+                            $itemData['product']['price'] = (float) $channelPrice;
+                            $itemData['product']['customer_type_price'] = (float) $channelPrice;
+                        }
+                    }
+                }
+
                 // Create snapshots from the request data
                 $productSnapshot = $itemData['product'] ?? null;
                 $variantSnapshot = isset($itemData['variant']) ? $itemData['variant'] : null;

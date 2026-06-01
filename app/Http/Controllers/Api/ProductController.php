@@ -7,6 +7,7 @@ use App\Models\Product;
 use App\Models\Store;
 use App\Models\ProductVariant;
 use App\Models\ProductModification;
+use App\Models\ProductPrice;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -24,6 +25,7 @@ class ProductController extends Controller
     {
         $user = $request->user();
         $storeId = $request->query('store_id');
+        $customerTypeId = $request->query('customer_type_id');
         $targetTenantId = $user->tenant_id;
         
         // Validate that the store belongs to an accessible tenant
@@ -154,6 +156,10 @@ class ProductController extends Controller
             });
         }
 
+        if ($storeId && $customerTypeId) {
+            $products = $this->applyCustomerTypePrices($products, $storeId, $customerTypeId);
+        }
+
         return response()->json([
             'success' => true,
             'data' => $products
@@ -167,6 +173,7 @@ class ProductController extends Controller
     {
         $user = $request->user();
         $storeId = $request->query('store_id');
+        $customerTypeId = $request->query('customer_type_id');
         
         // If store_id is provided, get product via store relationship (allows cross-tenant)
         if ($storeId) {
@@ -274,6 +281,10 @@ class ProductController extends Controller
             }
             // Remove stores relationship from response
             unset($product->stores);
+        }
+
+        if ($storeId && $customerTypeId) {
+            $product = $this->applyCustomerTypePrices(collect([$product]), $storeId, $customerTypeId)->first();
         }
 
         return response()->json([
@@ -489,5 +500,54 @@ class ProductController extends Controller
             'success' => true,
             'message' => 'Product deleted successfully'
         ]);
+    }
+
+    private function applyCustomerTypePrices($products, string $storeId, string $customerTypeId)
+    {
+        $productIds = $products->pluck('id')->filter()->values();
+
+        if ($productIds->isEmpty()) {
+            return $products;
+        }
+
+        $prices = ProductPrice::where('store_id', $storeId)
+            ->where('customer_type_id', $customerTypeId)
+            ->where('is_active', true)
+            ->whereIn('product_id', $productIds)
+            ->get()
+            ->groupBy('product_id');
+
+        return $products->map(function ($product) use ($prices, $customerTypeId) {
+            $productPrices = $prices->get($product->id, collect());
+            $basePrice = $productPrices->firstWhere('variant_id', null);
+
+            $product->setAttribute('base_price', (int) $product->price);
+            $product->setAttribute('display_price', $basePrice ? (int) $basePrice->price : (int) $product->price);
+            $product->setAttribute('customer_type_price', $basePrice ? (int) $basePrice->price : null);
+            $product->setAttribute('active_customer_type_id', $customerTypeId);
+
+            if ($basePrice) {
+                $product->price = (int) $basePrice->price;
+            }
+
+            if ($product->relationLoaded('variantCombinations')) {
+                $product->setRelation('variantCombinations', $product->variantCombinations->map(function ($combination) use ($productPrices, $customerTypeId) {
+                    $channelPrice = $productPrices->firstWhere('variant_id', $combination->id);
+
+                    $combination->setAttribute('base_price', (int) $combination->price);
+                    $combination->setAttribute('display_price', $channelPrice ? (int) $channelPrice->price : (int) $combination->price);
+                    $combination->setAttribute('customer_type_price', $channelPrice ? (int) $channelPrice->price : null);
+                    $combination->setAttribute('active_customer_type_id', $customerTypeId);
+
+                    if ($channelPrice) {
+                        $combination->price = (int) $channelPrice->price;
+                    }
+
+                    return $combination;
+                }));
+            }
+
+            return $product;
+        });
     }
 }
