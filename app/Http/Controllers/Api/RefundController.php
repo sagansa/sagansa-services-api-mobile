@@ -9,6 +9,7 @@ use App\Models\Refund;
 use App\Models\RefundItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
 
 class RefundController extends Controller
@@ -19,6 +20,8 @@ class RefundController extends Controller
     public function checkEligibility(Order $order)
     {
         try {
+            $order->loadMissing('orderItems');
+
             // Check if order is paid
             if (!$order->isPaid()) {
                 return response()->json([
@@ -37,15 +40,17 @@ class RefundController extends Controller
 
             // Get available items for refund
             $availableItems = $order->orderItems()->get()->map(function ($item) {
-                $availableQty = $item->quantity - $item->quantity_refunded;
+                $quantityRefunded = (int) ($item->quantity_refunded ?? 0);
+                $unitPrice = (float) ($item->unit_price ?? 0);
+                $availableQty = (int) $item->quantity - $quantityRefunded;
                 return [
                     'order_item_id' => $item->id,
-                    'product_name' => $item->product_snapshot['name'] ?? 'Unknown',
+                    'product_name' => data_get($item->product_snapshot, 'name', 'Unknown'),
                     'quantity' => $item->quantity,
-                    'quantity_refunded' => $item->quantity_refunded,
+                    'quantity_refunded' => $quantityRefunded,
                     'available_quantity' => $availableQty,
-                    'unit_price' => $item->unit_price,
-                    'max_refund_amount' => $availableQty * $item->unit_price,
+                    'unit_price' => $unitPrice,
+                    'max_refund_amount' => $availableQty * $unitPrice,
                 ];
             })->filter(function ($item) {
                 return $item['available_quantity'] > 0;
@@ -57,8 +62,8 @@ class RefundController extends Controller
                     'id' => $order->id,
                     'receipt_number' => $order->receipt_number,
                     'grand_total' => $order->grand_total,
-                    'total_refunded' => $order->total_refunded,
-                    'available_refund_amount' => $order->grand_total - $order->total_refunded,
+                    'total_refunded' => (float) ($order->total_refunded ?? 0),
+                    'available_refund_amount' => (float) $order->grand_total - (float) ($order->total_refunded ?? 0),
                 ],
                 'available_items' => $availableItems,
             ]);
@@ -117,29 +122,31 @@ class RefundController extends Controller
                     ], 400);
                 }
 
-                $availableQty = $orderItem->quantity - $orderItem->quantity_refunded;
+                $quantityRefunded = (int) ($orderItem->quantity_refunded ?? 0);
+                $availableQty = (int) $orderItem->quantity - $quantityRefunded;
 
                 if ($item['quantity'] > $availableQty) {
                     return response()->json([
                         'success' => false,
-                        'message' => "Quantity exceeds available refund quantity for item {$orderItem->product_snapshot['name']}",
+                        'message' => 'Quantity exceeds available refund quantity for item ' . data_get($orderItem->product_snapshot, 'name', 'Unknown'),
                     ], 400);
                 }
 
-                $itemRefundAmount = $item['quantity'] * $orderItem->unit_price;
+                $unitPrice = (float) ($orderItem->unit_price ?? 0);
+                $itemRefundAmount = $item['quantity'] * $unitPrice;
                 $totalRefundAmount += $itemRefundAmount;
 
                 $validatedItems[] = [
                     'order_item' => $orderItem,
                     'quantity' => $item['quantity'],
-                    'unit_price' => $orderItem->unit_price,
+                    'unit_price' => $unitPrice,
                     'total_refund_amount' => $itemRefundAmount,
                     'reason' => $item['reason'] ?? null,
                 ];
             }
 
             // Check total refund amount
-            if (($order->total_refunded + $totalRefundAmount) > $order->grand_total) {
+            if (((float) ($order->total_refunded ?? 0) + $totalRefundAmount) > (float) $order->grand_total) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Total refund amount exceeds order total',
@@ -156,7 +163,7 @@ class RefundController extends Controller
                     'tenant_id' => $order->tenant_id,
                     'order_id' => $order->id,
                     'refund_number' => Refund::generateRefundNumber(),
-                    'refund_type' => ($order->total_refunded + $totalRefundAmount) >= $order->grand_total 
+                    'refund_type' => ((float) ($order->total_refunded ?? 0) + $totalRefundAmount) >= (float) $order->grand_total 
                         ? Refund::TYPE_FULL 
                         : Refund::TYPE_PARTIAL,
                     'total_amount' => $totalRefundAmount,
@@ -189,10 +196,18 @@ class RefundController extends Controller
                 $order->increment('refund_count');
 
                 // Update payment status
-                if ($order->total_refunded >= $order->grand_total) {
-                    $order->payments()->update(['status' => 'refunded']);
-                } else {
-                    $order->payments()->update(['status' => 'partial_refund']);
+                $order->refresh();
+
+                if (Schema::hasColumn('order_payments', 'status')) {
+                    if ((float) ($order->total_refunded ?? 0) >= (float) $order->grand_total) {
+                        $order->payments()->update(['status' => 'refunded']);
+                    } else {
+                        $order->payments()->update(['status' => 'partial_refund']);
+                    }
+                }
+
+                if (Schema::hasColumn('orders', 'payment_status') && (float) ($order->total_refunded ?? 0) >= (float) $order->grand_total) {
+                    $order->update(['payment_status' => 'refunded', 'status' => 'refunded']);
                 }
 
                 return $refund;
@@ -213,7 +228,7 @@ class RefundController extends Controller
                     'refunded_at' => $refund->refunded_at->toDateTimeString(),
                     'items' => $refund->refundItems->map(function ($item) {
                         return [
-                            'product_name' => $item->orderItem->product_snapshot['name'] ?? 'Unknown',
+                            'product_name' => data_get($item->orderItem->product_snapshot, 'name', 'Unknown'),
                             'quantity_refunded' => $item->quantity_refunded,
                             'unit_price' => $item->unit_price,
                             'total_refund_amount' => $item->total_refund_amount,

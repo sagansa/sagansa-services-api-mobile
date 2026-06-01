@@ -28,8 +28,10 @@ class OrderItem extends Model
         'order_id',
         'store_id', // Added for proper data segregation
         'quantity',
+        'quantity_refunded',
         'unit_price',
         'total_price',
+        'refund_amount',
         'discount_amount',
         'tax_amount',
         'notes',
@@ -49,8 +51,10 @@ class OrderItem extends Model
     {
         return [
             'quantity' => 'integer',
+            'quantity_refunded' => 'integer',
             'unit_price' => 'decimal:2',
             'total_price' => 'decimal:2',
+            'refund_amount' => 'decimal:2',
             'discount_amount' => 'decimal:2',
             'tax_amount' => 'decimal:2',
             'is_custom_price' => 'boolean',

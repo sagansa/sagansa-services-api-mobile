@@ -22,6 +22,7 @@ class Order extends Model
         'customer_phone',
         'table_code',
         'status',
+        'payment_status',
         'subtotal',
         'discount_total',
         'tax_total',
@@ -40,6 +41,8 @@ class Order extends Model
         'proof_of_payment',
         'payment_snapshot',
         'customer_type_snapshot',
+        'total_refunded',
+        'refund_count',
     ];
 
     protected $appends = [
@@ -57,11 +60,14 @@ class Order extends Model
         'discount_total' => 'decimal:2',
         'grand_total' => 'decimal:2',
         'payment_type_id' => 'string',
+        'payment_status' => 'string',
         'paid_at' => 'datetime',
         'is_offline' => 'boolean',
         'synced_at' => 'datetime',
         'payment_snapshot' => 'array',
         'customer_type_snapshot' => 'array',
+        'total_refunded' => 'decimal:2',
+        'refund_count' => 'integer',
     ];
 
     protected $dates = [

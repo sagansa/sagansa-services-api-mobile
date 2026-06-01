@@ -14,6 +14,7 @@ use App\Models\ProductVariantCombination;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
 
 class OrderController extends Controller
@@ -297,8 +298,8 @@ class OrderController extends Controller
     {
         $user = $request->user();
         
-        $order = Order::where('id', $orderId)
-            ->where('tenant_id', $user->tenant_id)
+        $order = Order::withoutGlobalScope('tenant')
+            ->where('id', $orderId)
             ->first();
 
         if (!$order) {
@@ -311,13 +312,80 @@ class OrderController extends Controller
         $request->validate([
             'status' => 'sometimes|in:pending,completed,cancelled,refunded',
             'paid_at' => 'nullable|date',
+            'payment_method_id' => 'nullable|exists:payment_methods,id',
+            'payment_method' => 'nullable|string|max:255',
         ]);
 
-        $order->update($request->only(['status', 'paid_at']));
+        $updates = $request->only(['status', 'paid_at']);
+
+        $paymentMethod = null;
+        if ($request->filled('payment_method_id')) {
+            $paymentMethod = \App\Models\PaymentMethod::where('id', $request->payment_method_id)
+                ->where('store_id', $order->store_id)
+                ->firstOrFail();
+
+            $updates['payment_method'] = $paymentMethod->name;
+            $updates['payment_snapshot'] = $paymentMethod->toArray();
+            $updates['paid_at'] = $updates['paid_at'] ?? now();
+            $updates['status'] = $updates['status'] ?? 'completed';
+
+            if (Schema::hasColumn('orders', 'payment_status')) {
+                $updates['payment_status'] = 'paid';
+            }
+        } elseif ($request->filled('payment_method')) {
+            $updates['payment_method'] = $request->payment_method;
+            $updates['paid_at'] = $updates['paid_at'] ?? now();
+            $updates['status'] = $updates['status'] ?? 'completed';
+
+            if (Schema::hasColumn('orders', 'payment_status')) {
+                $updates['payment_status'] = 'paid';
+            }
+        }
+
+        $order->update($updates);
+
+        if ($paymentMethod && Schema::hasTable('order_payments')) {
+            $paymentData = [
+                'order_id' => $order->id,
+                'amount' => $order->grand_total,
+            ];
+
+            if (Schema::hasColumn('order_payments', 'tenant_id')) {
+                $paymentData['tenant_id'] = $order->tenant_id;
+            }
+            if (Schema::hasColumn('order_payments', 'payment_method')) {
+                $paymentData['payment_method'] = $paymentMethod->name;
+            }
+            if (Schema::hasColumn('order_payments', 'payment_type_id') && $order->payment_type_id) {
+                $paymentData['payment_type_id'] = $order->payment_type_id;
+            }
+            if (Schema::hasColumn('order_payments', 'status')) {
+                $paymentData['status'] = 'paid';
+            }
+            if (Schema::hasColumn('order_payments', 'captured_at')) {
+                $paymentData['captured_at'] = $order->paid_at ?? now();
+            }
+            if (Schema::hasColumn('order_payments', 'paid_at')) {
+                $paymentData['paid_at'] = $order->paid_at ?? now();
+            }
+            if (Schema::hasColumn('order_payments', 'is_offline')) {
+                $paymentData['is_offline'] = false;
+            }
+            if (Schema::hasColumn('order_payments', 'fee')) {
+                $paymentData['fee'] = 0;
+            }
+            if (Schema::hasColumn('order_payments', 'total_amount')) {
+                $paymentData['total_amount'] = $order->grand_total;
+            }
+
+            if (!Schema::hasColumn('order_payments', 'payment_type_id') || $order->payment_type_id) {
+                $order->payments()->create($paymentData);
+            }
+        }
 
         return response()->json([
             'success' => true,
-            'data' => $order->load(['orderItems'])
+            'data' => $order->fresh()->load(['orderItems', 'payments'])
         ]);
     }
 }
