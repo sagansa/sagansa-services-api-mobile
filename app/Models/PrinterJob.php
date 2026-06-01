@@ -2,15 +2,13 @@
 
 namespace App\Models;
 
-use App\Traits\TenantScope;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class PrinterJob extends Model
 {
-    use HasFactory, SoftDeletes, HasUuids, TenantScope;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
         'printer_id',
@@ -24,7 +22,6 @@ class PrinterJob extends Model
     ];
 
     protected $casts = [
-        'id' => 'string',
         'printer_id' => 'string',
         'order_id' => 'string',
         'job_type' => 'string',

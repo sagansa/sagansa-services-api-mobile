@@ -9,7 +9,6 @@ use App\Models\OrderItemModification;
 use App\Models\Store;
 use App\Models\Product;
 use App\Models\ProductVariant;
-use App\Models\ProductPrice;
 use App\Models\ProductVariantCombination;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -136,11 +135,11 @@ class OrderController extends Controller
             // Create order items with JSON snapshots
             foreach ($request->order_items as $itemData) {
                 if ($request->customer_type_id && !empty($itemData['product_id'])) {
-                    $channelPrice = ProductPrice::where('store_id', $request->store_id)
-                        ->where('product_id', $itemData['product_id'])
-                        ->where('customer_type_id', $request->customer_type_id)
-                        ->where('is_active', true)
-                        ->value('price');
+                    $channelPrice = $this->resolveChannelPrice(
+                        $request->store_id,
+                        $itemData['product_id'],
+                        $request->customer_type_id
+                    );
 
                     if ($channelPrice !== null) {
                         $variantTotal = 0;
@@ -387,5 +386,17 @@ class OrderController extends Controller
             'success' => true,
             'data' => $order->fresh()->load(['orderItems', 'payments'])
         ]);
+    }
+
+    private function resolveChannelPrice(string $storeId, string $productId, string $customerTypeId): ?float
+    {
+        $price = DB::table('product_prices')
+            ->where('store_id', $storeId)
+            ->where('product_id', $productId)
+            ->where('customer_type_id', $customerTypeId)
+            ->where('is_active', true)
+            ->value('price');
+
+        return $price === null ? null : (float) $price;
     }
 }
