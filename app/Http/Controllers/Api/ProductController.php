@@ -519,7 +519,7 @@ class ProductController extends Controller
 
         return $products->map(function ($product) use ($prices, $customerTypeId) {
             $productPrices = $prices->get($product->id, collect());
-            $basePrice = $productPrices->firstWhere('variant_id', null);
+            $basePrice = $productPrices->first();
 
             $product->setAttribute('base_price', (int) $product->price);
             $product->setAttribute('display_price', $basePrice ? (int) $basePrice->price : (int) $product->price);
@@ -528,23 +528,6 @@ class ProductController extends Controller
 
             if ($basePrice) {
                 $product->price = (int) $basePrice->price;
-            }
-
-            if ($product->relationLoaded('variantCombinations')) {
-                $product->setRelation('variantCombinations', $product->variantCombinations->map(function ($combination) use ($productPrices, $customerTypeId) {
-                    $channelPrice = $productPrices->firstWhere('variant_id', $combination->id);
-
-                    $combination->setAttribute('base_price', (int) $combination->price);
-                    $combination->setAttribute('display_price', $channelPrice ? (int) $channelPrice->price : (int) $combination->price);
-                    $combination->setAttribute('customer_type_price', $channelPrice ? (int) $channelPrice->price : null);
-                    $combination->setAttribute('active_customer_type_id', $customerTypeId);
-
-                    if ($channelPrice) {
-                        $combination->price = (int) $channelPrice->price;
-                    }
-
-                    return $combination;
-                }));
             }
 
             return $product;

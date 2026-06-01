@@ -10,6 +10,7 @@ use App\Models\Store;
 use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\ProductPrice;
+use App\Models\ProductVariantCombination;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -44,6 +45,7 @@ class OrderController extends Controller
             'order_items' => 'required|array',
             'order_items.*.product_id' => 'nullable|exists:products,id',
             'order_items.*.product_variant_id' => 'nullable|exists:product_variants,id',
+            'order_items.*.variant_combination_id' => 'nullable|exists:product_variant_combinations,id',
             'order_items.*.quantity' => 'required|integer|min:1',
             'order_items.*.unit_price' => 'required|numeric|min:0',
             'order_items.*.total_price' => 'required|numeric|min:0',
@@ -132,18 +134,24 @@ class OrderController extends Controller
 
             // Create order items with JSON snapshots
             foreach ($request->order_items as $itemData) {
-                if ($request->customer_type_id && !empty($itemData['product_id']) && empty($itemData['product_variant_id'])) {
+                if ($request->customer_type_id && !empty($itemData['product_id'])) {
                     $channelPrice = ProductPrice::where('store_id', $request->store_id)
                         ->where('product_id', $itemData['product_id'])
                         ->where('customer_type_id', $request->customer_type_id)
-                        ->whereNull('variant_id')
                         ->where('is_active', true)
                         ->value('price');
 
                     if ($channelPrice !== null) {
+                        $variantTotal = 0;
+                        if (! empty($itemData['variant_combination_id'])) {
+                            $variantTotal = (float) (ProductVariantCombination::where('product_id', $itemData['product_id'])
+                                ->where('id', $itemData['variant_combination_id'])
+                                ->value('price') ?? 0);
+                        }
+
                         $modificationsTotal = collect($itemData['modifications'] ?? [])
                             ->sum(fn ($modification) => (float) ($modification['price'] ?? 0));
-                        $itemData['unit_price'] = (float) $channelPrice + $modificationsTotal;
+                        $itemData['unit_price'] = (float) $channelPrice + $variantTotal + $modificationsTotal;
                         $itemData['total_price'] = $itemData['unit_price'] * (int) $itemData['quantity'];
 
                         if (isset($itemData['product']) && is_array($itemData['product'])) {
