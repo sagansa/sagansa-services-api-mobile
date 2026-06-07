@@ -10,6 +10,7 @@ use App\Models\PaymentMethod;
 use App\Models\CustomerType;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class PublicController extends Controller
 {
@@ -40,10 +41,20 @@ class PublicController extends Controller
             ], 400);
         }
 
+        $storeColumns = ['id', 'name', 'nickname', 'tenant_id', 'latitude', 'longitude'];
+
+        if (Schema::hasColumn('stores', 'phone')) {
+            $storeColumns[] = 'phone';
+        }
+
+        if (Schema::hasColumn('stores', 'no_telp')) {
+            $storeColumns[] = 'no_telp';
+        }
+
         $stores = Store::withoutGlobalScope('tenant')
             ->where('tenant_id', $tenantId)
             ->where('status', 'active')
-            ->select(['id', 'name', 'nickname', 'tenant_id'])
+            ->select($storeColumns)
             ->get();
 
         return response()->json([

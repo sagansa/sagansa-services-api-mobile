@@ -32,7 +32,29 @@ class StoreController extends Controller
             ->with(['paymentMethods' => function($query) {
                 $query->where('is_active', true);
             }, 'tenant:id,name']) // Load tenant name
-            ->select(['id', 'name', 'nickname', 'email', 'status', 'radius', 'latitude', 'longitude', 'tax_rate', 'tax_name', 'tenant_id'])
+            ->select([
+                'id',
+                'tenant_id',
+                'name',
+                'nickname',
+                'email',
+                'status',
+                'radius',
+                'latitude',
+                'longitude',
+                'tax_rate',
+                'tax_name',
+                'tax_type',
+                'service_charge_type',
+                'service_charge_rate',
+                'service_charge_amount',
+                'receipt_header',
+                'receipt_footer',
+                'email_receipt_logo',
+                'print_receipt_logo',
+                'address',
+                'phone',
+            ])
             ->when($request->has('status'), function ($query) use ($request) {
                 return $query->where('status', $request->status);
             })
@@ -67,7 +89,29 @@ class StoreController extends Controller
             ->with(['paymentMethods' => function($query) {
                 $query->where('is_active', true);
             }])
-            ->select(['id', 'name', 'nickname', 'email', 'status', 'radius', 'latitude', 'longitude', 'tax_rate', 'tax_name'])
+            ->select([
+                'id',
+                'tenant_id',
+                'name',
+                'nickname',
+                'email',
+                'status',
+                'radius',
+                'latitude',
+                'longitude',
+                'tax_rate',
+                'tax_name',
+                'tax_type',
+                'service_charge_type',
+                'service_charge_rate',
+                'service_charge_amount',
+                'receipt_header',
+                'receipt_footer',
+                'email_receipt_logo',
+                'print_receipt_logo',
+                'address',
+                'phone',
+            ])
             ->first();
 
         if (!$store) {
