@@ -19,6 +19,8 @@ class Product extends Model
         'name',
         'slug',
         'description',
+        'type',
+        'bundle_pricing_mode',
         'price',
         'image',
         'sku',
@@ -40,7 +42,7 @@ class Product extends Model
         ];
     }
 
-    protected $appends = ['category_detail'];
+    protected $appends = ['category_detail', 'bundle_available_stock'];
 
     public function toArray()
     {
@@ -55,6 +57,30 @@ class Product extends Model
             if (!array_key_exists('category', $array) || is_array($array['category']) || is_null($array['category'])) {
                 $array['category'] = $categoryRelation ? $categoryRelation->name : null;
             }
+        }
+
+        if ($this->relationLoaded('bundleItems')) {
+            $array['bundle_items'] = $this->getRelation('bundleItems')
+                ->map(function ($item) {
+                    $component = $item->componentProduct;
+
+                    return [
+                        'id' => $item->id,
+                        'bundle_product_id' => $item->bundle_product_id,
+                        'component_product_id' => $item->component_product_id,
+                        'quantity' => (int) $item->quantity,
+                        'sort_order' => (int) $item->sort_order,
+                        'component_product' => $component ? [
+                            'id' => $component->id,
+                            'name' => $component->name,
+                            'price' => (int) $component->price,
+                            'stock' => (int) $component->stock,
+                            'is_active' => (bool) $component->is_active,
+                        ] : null,
+                    ];
+                })
+                ->values()
+                ->all();
         }
         
         return $array;
@@ -74,6 +100,30 @@ class Product extends Model
         }
         
         return null;
+    }
+
+    public function getBundleAvailableStockAttribute(): ?int
+    {
+        if (($this->type ?: 'single') !== 'bundle') {
+            return null;
+        }
+
+        if (! $this->relationLoaded('bundleItems')) {
+            return null;
+        }
+
+        if ($this->bundleItems->isEmpty()) {
+            return null;
+        }
+
+        return $this->bundleItems
+            ->map(function ($item) {
+                $quantity = max(1, (int) $item->quantity);
+                $stock = (int) ($item->componentProduct?->stock ?? 0);
+
+                return intdiv($stock, $quantity);
+            })
+            ->min();
     }
 
     public function tenant()
@@ -121,6 +171,16 @@ class Product extends Model
     public function productPrices()
     {
         return $this->hasMany(ProductPrice::class);
+    }
+
+    public function bundleItems()
+    {
+        return $this->hasMany(ProductBundleItem::class, 'bundle_product_id')->orderBy('sort_order');
+    }
+
+    public function includedInBundles()
+    {
+        return $this->hasMany(ProductBundleItem::class, 'component_product_id');
     }
 
     public function orderItems()

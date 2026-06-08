@@ -106,6 +106,9 @@ class PublicController extends Controller
                 'modifications' => function($q) {
                     $q->withoutGlobalScopes();
                 },
+                'bundleItems.componentProduct' => function($q) {
+                    $q->withoutGlobalScopes();
+                },
                 'stores' => function($q) use ($storeId) {
                     $q->where('stores.id', $storeId);
                 }
@@ -120,12 +123,14 @@ class PublicController extends Controller
                     $product->price = (int) $storePrice;
                 }
 
-                $stock = $product->stock;
+                $isBundle = ($product->type ?: 'single') === 'bundle';
+                $stock = $isBundle ? ($product->bundle_available_stock ?? 0) : $product->stock;
                 $tracksStock = $product->remaining === true;
                 $hasStock = !$tracksStock || (int) $stock > 0;
                 $isAvailable = $product->is_active && $hasStock;
 
                 $product->setAttribute('isAvailable', $isAvailable);
+                $product->setAttribute('is_available', $isAvailable);
                 $product->setAttribute('stock', $stock);
 
                 unset($product->stores);

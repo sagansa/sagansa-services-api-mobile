@@ -116,6 +116,9 @@ class ProductController extends Controller
             },
             'modifications' => function($q) {
                 $q->withoutGlobalScopes();
+            },
+            'bundleItems.componentProduct' => function($q) {
+                $q->withoutGlobalScopes();
             }
         ]);
 
@@ -150,8 +153,14 @@ class ProductController extends Controller
                 if ($storePrice && $storePrice->pivot && $storePrice->pivot->price) {
                     $product->price = $storePrice->pivot->price;
                 }
+                $this->applyBundleAvailability($product);
                 // Remove stores relationship from response to keep it clean
                 unset($product->stores);
+                return $product;
+            });
+        } else {
+            $products = $products->map(function($product) {
+                $this->applyBundleAvailability($product);
                 return $product;
             });
         }
@@ -237,6 +246,9 @@ class ProductController extends Controller
                     'modifications' => function($q) {
                         $q->withoutGlobalScopes();
                     },
+                    'bundleItems.componentProduct' => function($q) {
+                        $q->withoutGlobalScopes();
+                    },
                     'stores' => function($q) use ($storeId) {
                         $q->where('stores.id', $storeId);
                     }
@@ -260,6 +272,9 @@ class ProductController extends Controller
                     },
                     'modifications' => function($q) {
                         $q->withoutGlobalScopes();
+                    },
+                    'bundleItems.componentProduct' => function($q) {
+                        $q->withoutGlobalScopes();
                     }
                 ]);
         }
@@ -282,6 +297,8 @@ class ProductController extends Controller
             // Remove stores relationship from response
             unset($product->stores);
         }
+
+        $this->applyBundleAvailability($product);
 
         if ($storeId && $customerTypeId) {
             $product = $this->applyCustomerTypePrices(collect([$product]), $storeId, $customerTypeId)->first();
@@ -532,5 +549,19 @@ class ProductController extends Controller
 
             return $product;
         });
+    }
+
+    private function applyBundleAvailability(Product $product): void
+    {
+        if (($product->type ?: 'single') !== 'bundle') {
+            return;
+        }
+
+        $availableStock = $product->bundle_available_stock;
+        $isAvailable = $product->is_active && $availableStock !== null && $availableStock > 0;
+
+        $product->setAttribute('stock', $availableStock ?? 0);
+        $product->setAttribute('isAvailable', $isAvailable);
+        $product->setAttribute('is_available', $isAvailable);
     }
 }
