@@ -74,7 +74,7 @@ class PresenceController extends Controller
             'shift_store_id' => 'required|exists:shift_stores,id',
             'latitude' => 'required|numeric',
             'longitude' => 'required|numeric',
-            'photo' => 'required|image|max:2048',
+            'photo' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
         ]);
 
         if ($validator->fails()) {
@@ -227,7 +227,7 @@ class PresenceController extends Controller
             'longitude' => 'required|numeric',
             'accuracy' => 'nullable|numeric',
             'store_id' => 'required|exists:stores,id',
-            'photo' => 'nullable|image|max:2048',
+            'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
         ]);
 
         $attendance = Attendance::where('id', $request->attendance_id)

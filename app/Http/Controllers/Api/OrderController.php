@@ -56,7 +56,7 @@ class OrderController extends Controller
             'order_items.*.notes' => 'nullable|string',
             'is_offline' => 'boolean',
             'device_identifier' => 'nullable|string|max:255',
-            'proof_of_payment' => 'nullable|image|max:5120', // Max 5MB
+            'proof_of_payment' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
         ]);
 
         // Verify that the store exists
