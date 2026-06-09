@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Carbon;
 
@@ -165,6 +166,8 @@ class AuthController extends Controller
     private function transformUser(User $user): array
     {
         $user->loadMissing('detail');
+        $effectiveRole = $this->resolveEffectiveRole($user);
+        $canApproveRefunds = in_array($effectiveRole, ['manager', 'owner'], true);
 
         return [
             'id' => $user->id,
@@ -172,11 +175,46 @@ class AuthController extends Controller
             'name' => $user->name,
             'email' => $user->email,
             'tenant_id' => $user->tenant_id,
-            'role' => $user->role,
+            'role' => $effectiveRole,
+            'base_role' => $user->role,
+            'can_approve_refunds' => $canApproveRefunds,
             'manager_id' => $user->manager_id,
             'created_at' => $user->created_at,
             'updated_at' => $user->updated_at,
         ];
+    }
+
+    private function resolveEffectiveRole(User $user): string
+    {
+        $tenantId = $user->tenant_id;
+        $userKey = (string) ($user->uuid ?: $user->id);
+        $role = strtolower((string) ($user->role ?? 'staff'));
+
+        if ($tenantId && Tenant::where('id', $tenantId)->where('owner_id', $userKey)->exists()) {
+            return 'owner';
+        }
+
+        if ($tenantId && Schema::connection('mysql_auth')->hasTable('tenant_user')) {
+            $tenantRole = DB::connection('mysql_auth')->table('tenant_user')
+                ->where('tenant_id', $tenantId)
+                ->where('user_id', $userKey)
+                ->value('role');
+
+            if (is_string($tenantRole) && $tenantRole !== '') {
+                $role = strtolower($tenantRole);
+            }
+        }
+
+        if (method_exists($user, 'hasRole')) {
+            if ($user->hasRole('owner')) {
+                return 'owner';
+            }
+            if ($user->hasRole('manager')) {
+                return 'manager';
+            }
+        }
+
+        return $role;
     }
 
     private function ensureTenantAccess(User $user): bool

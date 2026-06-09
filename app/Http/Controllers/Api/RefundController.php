@@ -217,6 +217,15 @@ class RefundController extends Controller
     public function index(Request $request)
     {
         try {
+            if ($request->get('status') === Refund::STATUS_PENDING
+                && !$request->has('order_id')
+                && !$this->canApproveAnyRefund($request)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Only manager or owner can view pending refund approvals',
+                ], 403);
+            }
+
             $query = Refund::with(['order.store', 'refundedBy', 'approvedBy', 'rejectedBy', 'refundItems.orderItem']);
 
             // Filters
@@ -433,6 +442,40 @@ class RefundController extends Controller
 
         return DB::table('tenants')
             ->where('id', $refund->tenant_id)
+            ->where('owner_id', $userKey)
+            ->exists();
+    }
+
+    private function canApproveAnyRefund(Request $request): bool
+    {
+        $user = $request->user();
+        if (!$user) {
+            return false;
+        }
+
+        $activeTenantId = $request->attributes->get('active_tenant_id') ?? $request->input('active_tenant_id') ?? $user->tenant_id;
+        $userKey = (string) ($user->uuid ?: $user->id);
+        $role = strtolower((string) ($user->role ?? ''));
+
+        if (in_array($role, ['manager', 'owner'], true)) {
+            return true;
+        }
+
+        if (method_exists($user, 'hasRole') && ($user->hasRole('manager') || $user->hasRole('owner'))) {
+            return true;
+        }
+
+        if (Schema::connection('mysql_auth')->hasTable('tenant_user')
+            && DB::connection('mysql_auth')->table('tenant_user')
+                ->where('user_id', $userKey)
+                ->where('tenant_id', $activeTenantId)
+                ->whereIn('role', ['manager', 'owner'])
+                ->exists()) {
+            return true;
+        }
+
+        return DB::table('tenants')
+            ->where('id', $activeTenantId)
             ->where('owner_id', $userKey)
             ->exists();
     }
