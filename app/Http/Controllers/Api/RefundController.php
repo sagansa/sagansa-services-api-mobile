@@ -7,7 +7,6 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Refund;
 use App\Models\RefundItem;
-use App\Models\Store;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -239,12 +238,13 @@ class RefundController extends Controller
                 ]);
 
             if ($isApprovalList) {
-                $accessibleStoreIds = $this->getRefundApprovalStoreIds($request);
+                $accessibleTenantIds = $this->getRefundApprovalTenantIds($request);
 
-                $query->whereHas('order', function ($orderQuery) use ($accessibleStoreIds) {
-                    $orderQuery->withoutGlobalScope('tenant')
-                        ->whereIn('store_id', $accessibleStoreIds);
-                });
+                if (empty($accessibleTenantIds)) {
+                    $query->whereRaw('1 = 0');
+                } else {
+                    $query->whereIn('tenant_id', $accessibleTenantIds);
+                }
             }
 
             // Filters
@@ -502,7 +502,7 @@ class RefundController extends Controller
                 ->exists();
     }
 
-    private function getRefundApprovalStoreIds(Request $request): array
+    private function getRefundApprovalTenantIds(Request $request): array
     {
         $user = $request->user();
         if (!$user) {
@@ -511,37 +511,28 @@ class RefundController extends Controller
 
         $activeTenantId = $request->attributes->get('active_tenant_id') ?? $request->input('active_tenant_id') ?? $user->tenant_id;
         $userKey = (string) ($user->uuid ?: $user->id);
-        $storeIds = collect();
+        $tenantIds = collect();
 
         if ($activeTenantId) {
-            $storeIds = $storeIds->merge(
-                Store::withoutGlobalScope('tenant')
-                    ->where('tenant_id', $activeTenantId)
-                    ->pluck('id')
-            );
+            $tenantIds->push($activeTenantId);
         }
 
         if (Schema::hasTable('user_stores')) {
-            $storeIds = $storeIds->merge(
-                DB::table('user_stores')
+            $tenantIds = $tenantIds->merge(
+                DB::table('stores')
+                    ->join('user_stores', 'stores.id', '=', 'user_stores.store_id')
                     ->where('user_id', $userKey)
-                    ->pluck('store_id')
+                    ->pluck('stores.tenant_id')
             );
         }
 
-        $ownedTenantIds = DB::table('tenants')
-            ->where('owner_id', $userKey)
-            ->pluck('id');
+        $tenantIds = $tenantIds->merge(
+            DB::table('tenants')
+                ->where('owner_id', $userKey)
+                ->pluck('id')
+        );
 
-        if ($ownedTenantIds->isNotEmpty()) {
-            $storeIds = $storeIds->merge(
-                Store::withoutGlobalScope('tenant')
-                    ->whereIn('tenant_id', $ownedTenantIds)
-                    ->pluck('id')
-            );
-        }
-
-        return $storeIds->filter()->unique()->values()->all();
+        return $tenantIds->filter()->unique()->values()->all();
     }
 
     private function formatRefund(Refund $refund): array
