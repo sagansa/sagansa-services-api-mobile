@@ -231,9 +231,6 @@ class RefundController extends Controller
             $query = ($isApprovalList ? Refund::withoutGlobalScope('tenant') : Refund::query())
                 ->with([
                     'order' => fn ($query) => $query->withoutGlobalScope('tenant')->with('store'),
-                    'refundedBy',
-                    'approvedBy',
-                    'rejectedBy',
                     'refundItems.orderItem',
                 ]);
 
@@ -281,7 +278,10 @@ class RefundController extends Controller
     public function show(Refund $refund)
     {
         try {
-            $refund->load(['order', 'refundedBy', 'approvedBy', 'rejectedBy', 'refundItems.orderItem']);
+            $refund->load([
+                'order' => fn ($query) => $query->withoutGlobalScope('tenant')->with('store'),
+                'refundItems.orderItem',
+            ]);
 
             return response()->json([
                 'success' => true,
@@ -365,8 +365,6 @@ class RefundController extends Controller
 
                 return $refund->fresh([
                     'order' => fn ($query) => $query->withoutGlobalScope('tenant')->with('store'),
-                    'refundedBy',
-                    'approvedBy',
                     'refundItems.orderItem',
                 ]);
             });
@@ -415,7 +413,10 @@ class RefundController extends Controller
                 'rejection_reason' => $validated['rejection_reason'] ?? null,
             ]);
 
-            $refund->load(['order.store', 'refundedBy', 'rejectedBy', 'refundItems.orderItem']);
+            $refund->load([
+                'order' => fn ($query) => $query->withoutGlobalScope('tenant')->with('store'),
+                'refundItems.orderItem',
+            ]);
 
             return response()->json([
                 'success' => true,
