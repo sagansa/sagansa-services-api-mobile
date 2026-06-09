@@ -229,9 +229,11 @@ class OrderController extends Controller
         // Bypass TenantScope to support cross-tenant access via store_id
         $query = Order::withoutGlobalScope('tenant')
             ->with([
+                'store',
                 'orderItems',
                 'refunds' => fn ($query) => $query
                     ->withoutGlobalScope('tenant')
+                    ->with('refundItems.orderItem')
                     ->where('status', Refund::STATUS_PENDING),
             ])
             ->orderBy('created_at', 'desc');
@@ -284,10 +286,12 @@ class OrderController extends Controller
             ->where('id', $orderId)
             ->with([
                 'orderItems',
+                'store',
                 'payments',
                 'customer',
                 'refunds' => fn ($query) => $query
                     ->withoutGlobalScope('tenant')
+                    ->with('refundItems.orderItem')
                     ->where('status', Refund::STATUS_PENDING),
             ])
             ->first();
@@ -401,9 +405,11 @@ class OrderController extends Controller
             'success' => true,
             'data' => $this->appendRefundSummary($order->fresh()->load([
                 'orderItems',
+                'store',
                 'payments',
                 'refunds' => fn ($query) => $query
                     ->withoutGlobalScope('tenant')
+                    ->with('refundItems.orderItem')
                     ->where('status', Refund::STATUS_PENDING),
             ]))
         ]);
@@ -424,6 +430,40 @@ class OrderController extends Controller
         $order->setAttribute('pending_refund_amount', $pendingAmount);
         $order->setAttribute('has_pending_refund', $pendingRefunds->isNotEmpty());
         $order->setAttribute('refund_status', $pendingRefunds->isNotEmpty() ? 'pending_approval' : null);
+        $order->setAttribute('pending_refunds', $pendingRefunds->map(function (Refund $refund) use ($order) {
+            return [
+                'id' => $refund->id,
+                'order_id' => $refund->order_id,
+                'refund_number' => $refund->refund_number,
+                'refund_type' => $refund->refund_type,
+                'total_amount' => (float) $refund->total_amount,
+                'reason' => $refund->reason,
+                'notes' => $refund->notes,
+                'status' => $refund->status,
+                'refunded_at' => $refund->refunded_at?->toDateTimeString(),
+                'order' => [
+                    'id' => $order->id,
+                    'receipt_number' => $order->receipt_number,
+                    'order_number' => $order->order_number ?? null,
+                    'store_id' => $order->store_id,
+                    'store_name' => $order->store?->nickname ?: $order->store?->name,
+                    'grand_total' => (float) $order->grand_total,
+                    'order_type' => $order->order_type,
+                    'customer_name' => $order->customer_name,
+                    'created_at' => $order->created_at?->toDateTimeString(),
+                ],
+                'items' => $refund->refundItems->map(function ($item) {
+                    return [
+                        'order_item_id' => $item->order_item_id,
+                        'product_name' => data_get($item->orderItem->product_snapshot, 'name', 'Unknown'),
+                        'quantity_refunded' => (int) $item->quantity_refunded,
+                        'unit_price' => (float) $item->unit_price,
+                        'total_refund_amount' => (float) $item->total_refund_amount,
+                        'reason' => $item->reason,
+                    ];
+                })->values(),
+            ];
+        })->values());
         $order->unsetRelation('refunds');
 
         return $order;
