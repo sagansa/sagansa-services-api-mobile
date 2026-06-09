@@ -39,15 +39,19 @@ class RefundController extends Controller
             }
 
             // Get available items for refund
-            $availableItems = $order->orderItems()->get()->map(function ($item) {
+            $availableItems = $order->orderItems()->with(['refundItems.refund'])->get()->map(function ($item) {
                 $quantityRefunded = (int) ($item->quantity_refunded ?? 0);
+                $quantityPending = (int) $item->refundItems
+                    ->filter(fn ($refundItem) => $refundItem->refund?->status === Refund::STATUS_PENDING)
+                    ->sum('quantity_refunded');
                 $unitPrice = (float) ($item->unit_price ?? 0);
-                $availableQty = (int) $item->quantity - $quantityRefunded;
+                $availableQty = (int) $item->quantity - $quantityRefunded - $quantityPending;
                 return [
                     'order_item_id' => $item->id,
                     'product_name' => data_get($item->product_snapshot, 'name', 'Unknown'),
                     'quantity' => $item->quantity,
                     'quantity_refunded' => $quantityRefunded,
+                    'quantity_pending_refund' => $quantityPending,
                     'available_quantity' => $availableQty,
                     'unit_price' => $unitPrice,
                     'max_refund_amount' => $availableQty * $unitPrice,
@@ -76,7 +80,7 @@ class RefundController extends Controller
     }
 
     /**
-     * Process a refund
+     * Request a refund. The actual refund is processed after manager/owner approval.
      */
     public function store(Request $request, Order $order)
     {
@@ -113,7 +117,7 @@ class RefundController extends Controller
             $validatedItems = [];
 
             foreach ($request->items as $item) {
-                $orderItem = OrderItem::find($item['order_item_id']);
+                $orderItem = OrderItem::with(['refundItems.refund'])->find($item['order_item_id']);
 
                 if (!$orderItem || $orderItem->order_id !== $order->id) {
                     return response()->json([
@@ -123,7 +127,10 @@ class RefundController extends Controller
                 }
 
                 $quantityRefunded = (int) ($orderItem->quantity_refunded ?? 0);
-                $availableQty = (int) $orderItem->quantity - $quantityRefunded;
+                $quantityPending = (int) $orderItem->refundItems
+                    ->filter(fn ($refundItem) => $refundItem->refund?->status === Refund::STATUS_PENDING)
+                    ->sum('quantity_refunded');
+                $availableQty = (int) $orderItem->quantity - $quantityRefunded - $quantityPending;
 
                 if ($item['quantity'] > $availableQty) {
                     return response()->json([
@@ -153,12 +160,11 @@ class RefundController extends Controller
                 ], 400);
             }
 
-            // Process refund in transaction
+            // Create pending refund request in transaction.
             $user = $request->user();
             $userKey = (string) ($user->uuid ?: $user->id);
 
             $refund = DB::transaction(function () use ($order, $request, $validatedItems, $totalRefundAmount, $userKey) {
-                // Create refund record
                 $refund = Refund::create([
                     'tenant_id' => $order->tenant_id,
                     'order_id' => $order->id,
@@ -172,10 +178,9 @@ class RefundController extends Controller
                     'refunded_by' => $userKey,
                     'refunded_at' => now(),
                     'payment_method' => $request->payment_method ?? 'cash',
-                    'status' => Refund::STATUS_COMPLETED,
+                    'status' => Refund::STATUS_PENDING,
                 ]);
 
-                // Create refund items
                 foreach ($validatedItems as $item) {
                     RefundItem::create([
                         'refund_id' => $refund->id,
@@ -185,29 +190,6 @@ class RefundController extends Controller
                         'total_refund_amount' => $item['total_refund_amount'],
                         'reason' => $item['reason'],
                     ]);
-
-                    // Update order item
-                    $item['order_item']->increment('quantity_refunded', $item['quantity']);
-                    $item['order_item']->increment('refund_amount', $item['total_refund_amount']);
-                }
-
-                // Update order totals
-                $order->increment('total_refunded', $totalRefundAmount);
-                $order->increment('refund_count');
-
-                // Update payment status
-                $order->refresh();
-
-                if (Schema::hasColumn('order_payments', 'status')) {
-                    if ((float) ($order->total_refunded ?? 0) >= (float) $order->grand_total) {
-                        $order->payments()->update(['status' => 'refunded']);
-                    } else {
-                        $order->payments()->update(['status' => 'partial_refund']);
-                    }
-                }
-
-                if (Schema::hasColumn('orders', 'payment_status') && (float) ($order->total_refunded ?? 0) >= (float) $order->grand_total) {
-                    $order->update(['payment_status' => 'refunded', 'status' => 'refunded']);
                 }
 
                 return $refund;
@@ -218,23 +200,8 @@ class RefundController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Refund processed successfully',
-                'refund' => [
-                    'id' => $refund->id,
-                    'refund_number' => $refund->refund_number,
-                    'refund_type' => $refund->refund_type,
-                    'total_amount' => $refund->total_amount,
-                    'status' => $refund->status,
-                    'refunded_at' => $refund->refunded_at->toDateTimeString(),
-                    'items' => $refund->refundItems->map(function ($item) {
-                        return [
-                            'product_name' => data_get($item->orderItem->product_snapshot, 'name', 'Unknown'),
-                            'quantity_refunded' => $item->quantity_refunded,
-                            'unit_price' => $item->unit_price,
-                            'total_refund_amount' => $item->total_refund_amount,
-                        ];
-                    }),
-                ],
+                'message' => 'Refund request submitted and waiting for manager/owner approval',
+                'refund' => $this->formatRefund($refund),
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
@@ -250,11 +217,15 @@ class RefundController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = Refund::with(['order', 'refundedBy', 'refundItems']);
+            $query = Refund::with(['order', 'refundedBy', 'approvedBy', 'rejectedBy', 'refundItems.orderItem']);
 
             // Filters
             if ($request->has('store_id')) {
                 $query->byStore($request->store_id);
+            }
+
+            if ($request->has('order_id')) {
+                $query->byOrder($request->order_id);
             }
 
             if ($request->has('status')) {
@@ -271,7 +242,8 @@ class RefundController extends Controller
 
             // Pagination
             $perPage = $request->get('per_page', 15);
-            $refunds = $query->orderBy('refunded_at', 'desc')->paginate($perPage);
+            $refunds = $query->orderByDesc('created_at')->paginate($perPage);
+            $refunds->getCollection()->transform(fn (Refund $refund) => $this->formatRefund($refund));
 
             return response()->json([
                 'success' => true,
@@ -291,11 +263,11 @@ class RefundController extends Controller
     public function show(Refund $refund)
     {
         try {
-            $refund->load(['order', 'refundedBy', 'refundItems.orderItem']);
+            $refund->load(['order', 'refundedBy', 'approvedBy', 'rejectedBy', 'refundItems.orderItem']);
 
             return response()->json([
                 'success' => true,
-                'refund' => $refund,
+                'refund' => $this->formatRefund($refund),
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -303,5 +275,196 @@ class RefundController extends Controller
                 'message' => 'Failed to fetch refund details: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    public function approve(Request $request, Refund $refund)
+    {
+        try {
+            if (!$this->canApproveRefund($request, $refund)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Only manager or owner can approve refunds',
+                ], 403);
+            }
+
+            if ($refund->status !== Refund::STATUS_PENDING) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Only pending refunds can be approved',
+                ], 400);
+            }
+
+            $approver = $request->user();
+            $approverKey = (string) ($approver->uuid ?: $approver->id);
+
+            $refund = DB::transaction(function () use ($refund, $approverKey) {
+                $refund->loadMissing(['order.payments', 'refundItems.orderItem']);
+                $order = $refund->order()->lockForUpdate()->firstOrFail();
+
+                foreach ($refund->refundItems as $refundItem) {
+                    $orderItem = OrderItem::query()->lockForUpdate()->findOrFail($refundItem->order_item_id);
+                    $availableQty = (int) $orderItem->quantity - (int) ($orderItem->quantity_refunded ?? 0);
+
+                    if ((int) $refundItem->quantity_refunded > $availableQty) {
+                        throw new \RuntimeException('Refund quantity is no longer available for item ' . data_get($orderItem->product_snapshot, 'name', 'Unknown'));
+                    }
+
+                    $orderItem->increment('quantity_refunded', (int) $refundItem->quantity_refunded);
+                    $orderItem->increment('refund_amount', (float) $refundItem->total_refund_amount);
+                }
+
+                $order->increment('total_refunded', (float) $refund->total_amount);
+                $order->increment('refund_count');
+                $order->refresh();
+
+                if (Schema::hasColumn('order_payments', 'status')) {
+                    $order->payments()->update([
+                        'status' => (float) ($order->total_refunded ?? 0) >= (float) $order->grand_total
+                            ? 'refunded'
+                            : 'partial_refund',
+                    ]);
+                }
+
+                if (Schema::hasColumn('orders', 'payment_status')) {
+                    $order->update([
+                        'payment_status' => (float) ($order->total_refunded ?? 0) >= (float) $order->grand_total
+                            ? 'refunded'
+                            : 'partial_refund',
+                        'status' => (float) ($order->total_refunded ?? 0) >= (float) $order->grand_total
+                            ? 'refunded'
+                            : $order->status,
+                    ]);
+                }
+
+                $refund->update([
+                    'status' => Refund::STATUS_COMPLETED,
+                    'approved_by' => $approverKey,
+                    'approved_at' => now(),
+                ]);
+
+                return $refund->fresh(['order', 'refundedBy', 'approvedBy', 'refundItems.orderItem']);
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Refund approved successfully',
+                'refund' => $this->formatRefund($refund),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to approve refund: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function reject(Request $request, Refund $refund)
+    {
+        try {
+            if (!$this->canApproveRefund($request, $refund)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Only manager or owner can reject refunds',
+                ], 403);
+            }
+
+            $validated = $request->validate([
+                'rejection_reason' => ['nullable', 'string', 'max:1000'],
+            ]);
+
+            if ($refund->status !== Refund::STATUS_PENDING) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Only pending refunds can be rejected',
+                ], 400);
+            }
+
+            $rejector = $request->user();
+            $rejectorKey = (string) ($rejector->uuid ?: $rejector->id);
+
+            $refund->update([
+                'status' => Refund::STATUS_REJECTED,
+                'rejected_by' => $rejectorKey,
+                'rejected_at' => now(),
+                'rejection_reason' => $validated['rejection_reason'] ?? null,
+            ]);
+
+            $refund->load(['order', 'refundedBy', 'rejectedBy', 'refundItems.orderItem']);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Refund rejected successfully',
+                'refund' => $this->formatRefund($refund),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to reject refund: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    private function canApproveRefund(Request $request, Refund $refund): bool
+    {
+        $user = $request->user();
+        if (!$user) {
+            return false;
+        }
+
+        $activeTenantId = $request->attributes->get('active_tenant_id') ?? $request->input('active_tenant_id') ?? $user->tenant_id;
+        $userKey = (string) ($user->uuid ?: $user->id);
+        $role = strtolower((string) ($user->role ?? ''));
+
+        if (in_array($role, ['manager', 'owner'], true)) {
+            return true;
+        }
+
+        if (method_exists($user, 'hasRole') && ($user->hasRole('manager') || $user->hasRole('owner'))) {
+            return true;
+        }
+
+        if (DB::connection('mysql_auth')->table('tenant_user')
+            ->where('user_id', $userKey)
+            ->where('tenant_id', $activeTenantId)
+            ->whereIn('role', ['manager', 'owner'])
+            ->exists()) {
+            return true;
+        }
+
+        return DB::table('tenants')
+            ->where('id', $refund->tenant_id)
+            ->where('owner_id', $userKey)
+            ->exists();
+    }
+
+    private function formatRefund(Refund $refund): array
+    {
+        return [
+            'id' => $refund->id,
+            'order_id' => $refund->order_id,
+            'refund_number' => $refund->refund_number,
+            'refund_type' => $refund->refund_type,
+            'total_amount' => (float) $refund->total_amount,
+            'reason' => $refund->reason,
+            'notes' => $refund->notes,
+            'status' => $refund->status,
+            'refunded_by' => $refund->refunded_by,
+            'refunded_at' => $refund->refunded_at?->toDateTimeString(),
+            'approved_by' => $refund->approved_by,
+            'approved_at' => $refund->approved_at?->toDateTimeString(),
+            'rejected_by' => $refund->rejected_by,
+            'rejected_at' => $refund->rejected_at?->toDateTimeString(),
+            'rejection_reason' => $refund->rejection_reason,
+            'items' => $refund->refundItems->map(function ($item) {
+                return [
+                    'order_item_id' => $item->order_item_id,
+                    'product_name' => data_get($item->orderItem->product_snapshot, 'name', 'Unknown'),
+                    'quantity_refunded' => (int) $item->quantity_refunded,
+                    'unit_price' => (float) $item->unit_price,
+                    'total_refund_amount' => (float) $item->total_refund_amount,
+                    'reason' => $item->reason,
+                ];
+            })->values(),
+        ];
     }
 }

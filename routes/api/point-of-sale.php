@@ -49,6 +49,8 @@ Route::middleware(['auth:sanctum', 'active.tenant'])->group(function () {
     Route::post('/orders/{order}/refund', [RefundController::class, 'store']);
     Route::get('/refunds', [RefundController::class, 'index']);
     Route::get('/refunds/{refund}', [RefundController::class, 'show']);
+    Route::post('/refunds/{refund}/approve', [RefundController::class, 'approve']);
+    Route::post('/refunds/{refund}/reject', [RefundController::class, 'reject']);
 
     // Saved carts/orders.
     Route::get('/saved-orders', [SavedOrderController::class, 'index']);

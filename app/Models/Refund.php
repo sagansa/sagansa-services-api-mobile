@@ -41,6 +41,11 @@ class Refund extends Model
         'notes',
         'refunded_by',
         'refunded_at',
+        'approved_by',
+        'approved_at',
+        'rejected_by',
+        'rejected_at',
+        'rejection_reason',
         'payment_method',
         'status',
     ];
@@ -55,6 +60,8 @@ class Refund extends Model
         return [
             'total_amount' => 'decimal:2',
             'refunded_at' => 'datetime',
+            'approved_at' => 'datetime',
+            'rejected_at' => 'datetime',
         ];
     }
 
@@ -79,6 +86,16 @@ class Refund extends Model
     public function refundedBy()
     {
         return $this->belongsTo(User::class, 'refunded_by', 'uuid');
+    }
+
+    public function approvedBy()
+    {
+        return $this->belongsTo(User::class, 'approved_by', 'uuid');
+    }
+
+    public function rejectedBy()
+    {
+        return $this->belongsTo(User::class, 'rejected_by', 'uuid');
     }
 
     /**
