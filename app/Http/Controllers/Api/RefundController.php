@@ -316,11 +316,17 @@ class RefundController extends Controller
             $approverKey = (string) ($approver->uuid ?: $approver->id);
 
             $refund = DB::transaction(function () use ($refund, $approverKey) {
-                $refund->loadMissing(['order.payments', 'refundItems.orderItem']);
-                $order = $refund->order()->lockForUpdate()->firstOrFail();
+                $refund->loadMissing(['refundItems']);
+                $order = Order::withoutGlobalScope('tenant')
+                    ->where('id', $refund->order_id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
                 foreach ($refund->refundItems as $refundItem) {
-                    $orderItem = OrderItem::query()->lockForUpdate()->findOrFail($refundItem->order_item_id);
+                    $orderItem = OrderItem::withoutGlobalScope('tenant')
+                        ->where('id', $refundItem->order_item_id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
                     $availableQty = (int) $orderItem->quantity - (int) ($orderItem->quantity_refunded ?? 0);
 
                     if ((int) $refundItem->quantity_refunded > $availableQty) {
@@ -348,9 +354,6 @@ class RefundController extends Controller
                         'payment_status' => (float) ($order->total_refunded ?? 0) >= (float) $order->grand_total
                             ? 'refunded'
                             : 'partial_refund',
-                        'status' => (float) ($order->total_refunded ?? 0) >= (float) $order->grand_total
-                            ? 'refunded'
-                            : $order->status,
                     ]);
                 }
 
@@ -360,7 +363,12 @@ class RefundController extends Controller
                     'approved_at' => now(),
                 ]);
 
-                return $refund->fresh(['order.store', 'refundedBy', 'approvedBy', 'refundItems.orderItem']);
+                return $refund->fresh([
+                    'order' => fn ($query) => $query->withoutGlobalScope('tenant')->with('store'),
+                    'refundedBy',
+                    'approvedBy',
+                    'refundItems.orderItem',
+                ]);
             });
 
             return response()->json([
@@ -441,11 +449,12 @@ class RefundController extends Controller
             return true;
         }
 
-        if (DB::connection('mysql_auth')->table('tenant_user')
-            ->where('user_id', $userKey)
-            ->where('tenant_id', $activeTenantId)
-            ->whereIn('role', ['manager', 'owner'])
-            ->exists()) {
+        if (Schema::connection('mysql_auth')->hasTable('tenant_user')
+            && DB::connection('mysql_auth')->table('tenant_user')
+                ->where('user_id', $userKey)
+                ->where('tenant_id', $activeTenantId)
+                ->whereIn('role', ['manager', 'owner'])
+                ->exists()) {
             return true;
         }
 
