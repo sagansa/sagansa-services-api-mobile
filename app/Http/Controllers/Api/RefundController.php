@@ -237,16 +237,6 @@ class RefundController extends Controller
                     'refundItems.orderItem',
                 ]);
 
-            if ($isApprovalList) {
-                $accessibleTenantIds = $this->getRefundApprovalTenantIds($request);
-
-                if (empty($accessibleTenantIds)) {
-                    $query->whereRaw('1 = 0');
-                } else {
-                    $query->whereIn('tenant_id', $accessibleTenantIds);
-                }
-            }
-
             // Filters
             if ($request->has('store_id')) {
                 $query->byStore($request->store_id);
@@ -500,39 +490,6 @@ class RefundController extends Controller
             || DB::table('tenants')
                 ->where('owner_id', $userKey)
                 ->exists();
-    }
-
-    private function getRefundApprovalTenantIds(Request $request): array
-    {
-        $user = $request->user();
-        if (!$user) {
-            return [];
-        }
-
-        $activeTenantId = $request->attributes->get('active_tenant_id') ?? $request->input('active_tenant_id') ?? $user->tenant_id;
-        $userKey = (string) ($user->uuid ?: $user->id);
-        $tenantIds = collect();
-
-        if ($activeTenantId) {
-            $tenantIds->push($activeTenantId);
-        }
-
-        if (Schema::hasTable('user_stores')) {
-            $tenantIds = $tenantIds->merge(
-                DB::table('stores')
-                    ->join('user_stores', 'stores.id', '=', 'user_stores.store_id')
-                    ->where('user_id', $userKey)
-                    ->pluck('stores.tenant_id')
-            );
-        }
-
-        $tenantIds = $tenantIds->merge(
-            DB::table('tenants')
-                ->where('owner_id', $userKey)
-                ->pluck('id')
-        );
-
-        return $tenantIds->filter()->unique()->values()->all();
     }
 
     private function formatRefund(Refund $refund): array
