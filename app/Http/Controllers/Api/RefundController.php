@@ -217,7 +217,7 @@ class RefundController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = Refund::with(['order', 'refundedBy', 'approvedBy', 'rejectedBy', 'refundItems.orderItem']);
+            $query = Refund::with(['order.store', 'refundedBy', 'approvedBy', 'rejectedBy', 'refundItems.orderItem']);
 
             // Filters
             if ($request->has('store_id')) {
@@ -342,7 +342,7 @@ class RefundController extends Controller
                     'approved_at' => now(),
                 ]);
 
-                return $refund->fresh(['order', 'refundedBy', 'approvedBy', 'refundItems.orderItem']);
+                return $refund->fresh(['order.store', 'refundedBy', 'approvedBy', 'refundItems.orderItem']);
             });
 
             return response()->json([
@@ -389,7 +389,7 @@ class RefundController extends Controller
                 'rejection_reason' => $validated['rejection_reason'] ?? null,
             ]);
 
-            $refund->load(['order', 'refundedBy', 'rejectedBy', 'refundItems.orderItem']);
+            $refund->load(['order.store', 'refundedBy', 'rejectedBy', 'refundItems.orderItem']);
 
             return response()->json([
                 'success' => true,
@@ -448,6 +448,17 @@ class RefundController extends Controller
             'reason' => $refund->reason,
             'notes' => $refund->notes,
             'status' => $refund->status,
+            'order' => $refund->order ? [
+                'id' => $refund->order->id,
+                'receipt_number' => $refund->order->receipt_number,
+                'order_number' => $refund->order->order_number ?? null,
+                'store_id' => $refund->order->store_id,
+                'store_name' => $refund->order->store?->nickname ?: $refund->order->store?->name,
+                'grand_total' => (float) $refund->order->grand_total,
+                'order_type' => $refund->order->order_type,
+                'customer_name' => $refund->order->customer_name,
+                'created_at' => $refund->order->created_at?->toDateTimeString(),
+            ] : null,
             'refunded_by' => $refund->refunded_by,
             'refunded_at' => $refund->refunded_at?->toDateTimeString(),
             'approved_by' => $refund->approved_by,
