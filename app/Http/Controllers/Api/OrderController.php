@@ -10,6 +10,7 @@ use App\Models\Store;
 use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantCombination;
+use App\Models\Refund;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -227,7 +228,12 @@ class OrderController extends Controller
         
         // Bypass TenantScope to support cross-tenant access via store_id
         $query = Order::withoutGlobalScope('tenant')
-            ->with(['orderItems'])
+            ->with([
+                'orderItems',
+                'refunds' => fn ($query) => $query
+                    ->withoutGlobalScope('tenant')
+                    ->where('status', Refund::STATUS_PENDING),
+            ])
             ->orderBy('created_at', 'desc');
 
         // Add optional filters
@@ -250,7 +256,9 @@ class OrderController extends Controller
             'request_store_id' => $request->store_id,
         ]);
 
-        $orders = $query->get();
+        $orders = $query->get()
+            ->map(fn (Order $order) => $this->appendRefundSummary($order))
+            ->values();
 
         \Log::info('Order Query Result', [
             'count' => $orders->count(),
@@ -274,7 +282,14 @@ class OrderController extends Controller
         // Bypass TenantScope to support cross-tenant access
         $order = Order::withoutGlobalScope('tenant')
             ->where('id', $orderId)
-            ->with(['orderItems', 'payments', 'customer'])
+            ->with([
+                'orderItems',
+                'payments',
+                'customer',
+                'refunds' => fn ($query) => $query
+                    ->withoutGlobalScope('tenant')
+                    ->where('status', Refund::STATUS_PENDING),
+            ])
             ->first();
 
         if (!$order) {
@@ -286,7 +301,7 @@ class OrderController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $order
+            'data' => $this->appendRefundSummary($order)
         ]);
     }
 
@@ -384,8 +399,34 @@ class OrderController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $order->fresh()->load(['orderItems', 'payments'])
+            'data' => $this->appendRefundSummary($order->fresh()->load([
+                'orderItems',
+                'payments',
+                'refunds' => fn ($query) => $query
+                    ->withoutGlobalScope('tenant')
+                    ->where('status', Refund::STATUS_PENDING),
+            ]))
         ]);
+    }
+
+    private function appendRefundSummary(Order $order): Order
+    {
+        $pendingRefunds = $order->relationLoaded('refunds')
+            ? $order->refunds->where('status', Refund::STATUS_PENDING)
+            : $order->refunds()
+                ->withoutGlobalScope('tenant')
+                ->where('status', Refund::STATUS_PENDING)
+                ->get();
+
+        $pendingAmount = (float) $pendingRefunds->sum('total_amount');
+
+        $order->setAttribute('pending_refund_count', $pendingRefunds->count());
+        $order->setAttribute('pending_refund_amount', $pendingAmount);
+        $order->setAttribute('has_pending_refund', $pendingRefunds->isNotEmpty());
+        $order->setAttribute('refund_status', $pendingRefunds->isNotEmpty() ? 'pending_approval' : null);
+        $order->unsetRelation('refunds');
+
+        return $order;
     }
 
     private function resolveChannelPrice(string $storeId, string $productId, string $customerTypeId): ?float
