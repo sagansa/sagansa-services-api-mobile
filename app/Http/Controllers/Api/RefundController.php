@@ -217,9 +217,11 @@ class RefundController extends Controller
     public function index(Request $request)
     {
         try {
+            $isManagerRefundList = !$request->has('order_id') && $this->canApproveAnyRefund($request);
+
             if ($request->get('status') === Refund::STATUS_PENDING
                 && !$request->has('order_id')
-                && !$this->canApproveAnyRefund($request)) {
+                && !$isManagerRefundList) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Only manager or owner can view pending refund approvals',
@@ -228,7 +230,7 @@ class RefundController extends Controller
 
             $isApprovalList = $request->get('status') === Refund::STATUS_PENDING && !$request->has('order_id');
 
-            $query = ($isApprovalList ? Refund::withoutGlobalScope('tenant') : Refund::query())
+            $query = ($isApprovalList || $isManagerRefundList ? Refund::withoutGlobalScope('tenant') : Refund::query())
                 ->with([
                     'order' => fn ($query) => $query->withoutGlobalScope('tenant')->with('store'),
                     'refundItems.orderItem',
