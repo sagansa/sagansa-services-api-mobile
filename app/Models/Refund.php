@@ -188,6 +188,13 @@ class Refund extends Model
         return $this->refundItems()->sum('total_refund_amount');
     }
 
+    public function resolveRouteBinding($value, $field = null)
+    {
+        return $this->withoutGlobalScope('tenant')
+            ->where($field ?? $this->getRouteKeyName(), $value)
+            ->first();
+    }
+
     /**
      * Get available refund types
      */

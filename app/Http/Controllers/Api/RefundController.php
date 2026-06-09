@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Refund;
 use App\Models\RefundItem;
+use App\Models\Store;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -226,7 +227,25 @@ class RefundController extends Controller
                 ], 403);
             }
 
-            $query = Refund::with(['order.store', 'refundedBy', 'approvedBy', 'rejectedBy', 'refundItems.orderItem']);
+            $isApprovalList = $request->get('status') === Refund::STATUS_PENDING && !$request->has('order_id');
+
+            $query = ($isApprovalList ? Refund::withoutGlobalScope('tenant') : Refund::query())
+                ->with([
+                    'order' => fn ($query) => $query->withoutGlobalScope('tenant')->with('store'),
+                    'refundedBy',
+                    'approvedBy',
+                    'rejectedBy',
+                    'refundItems.orderItem',
+                ]);
+
+            if ($isApprovalList) {
+                $accessibleStoreIds = $this->getRefundApprovalStoreIds($request);
+
+                $query->whereHas('order', function ($orderQuery) use ($accessibleStoreIds) {
+                    $orderQuery->withoutGlobalScope('tenant')
+                        ->whereIn('store_id', $accessibleStoreIds);
+                });
+            }
 
             // Filters
             if ($request->has('store_id')) {
@@ -477,7 +496,52 @@ class RefundController extends Controller
         return DB::table('tenants')
             ->where('id', $activeTenantId)
             ->where('owner_id', $userKey)
-            ->exists();
+            ->exists()
+            || DB::table('tenants')
+                ->where('owner_id', $userKey)
+                ->exists();
+    }
+
+    private function getRefundApprovalStoreIds(Request $request): array
+    {
+        $user = $request->user();
+        if (!$user) {
+            return [];
+        }
+
+        $activeTenantId = $request->attributes->get('active_tenant_id') ?? $request->input('active_tenant_id') ?? $user->tenant_id;
+        $userKey = (string) ($user->uuid ?: $user->id);
+        $storeIds = collect();
+
+        if ($activeTenantId) {
+            $storeIds = $storeIds->merge(
+                Store::withoutGlobalScope('tenant')
+                    ->where('tenant_id', $activeTenantId)
+                    ->pluck('id')
+            );
+        }
+
+        if (Schema::hasTable('user_stores')) {
+            $storeIds = $storeIds->merge(
+                DB::table('user_stores')
+                    ->where('user_id', $userKey)
+                    ->pluck('store_id')
+            );
+        }
+
+        $ownedTenantIds = DB::table('tenants')
+            ->where('owner_id', $userKey)
+            ->pluck('id');
+
+        if ($ownedTenantIds->isNotEmpty()) {
+            $storeIds = $storeIds->merge(
+                Store::withoutGlobalScope('tenant')
+                    ->whereIn('tenant_id', $ownedTenantIds)
+                    ->pluck('id')
+            );
+        }
+
+        return $storeIds->filter()->unique()->values()->all();
     }
 
     private function formatRefund(Refund $refund): array
