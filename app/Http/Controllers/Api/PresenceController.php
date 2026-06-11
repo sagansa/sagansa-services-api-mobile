@@ -501,7 +501,7 @@ class PresenceController extends Controller
                 'duration' => $shift->duration,
             ] : null,
             'status' => $attendance->status,
-            'image_in' => $attendance->image_in,
+            'image_in' => $this->resolveImageUrl($attendance->image_in),
             'check_in' => optional($attendance->check_in)->toIso8601String(),
             'location_in' => ($attendance->latitude_in !== null && $attendance->longitude_in !== null)
                 ? [
@@ -509,7 +509,7 @@ class PresenceController extends Controller
                     'longitude' => (float) $attendance->longitude_in,
                 ]
                 : null,
-            'image_out' => $attendance->image_out,
+            'image_out' => $this->resolveImageUrl($attendance->image_out),
             'check_out' => optional($attendance->check_out)->toIso8601String(),
             'location_out' => ($attendance->latitude_out !== null && $attendance->longitude_out !== null)
                 ? [
@@ -583,6 +583,26 @@ class PresenceController extends Controller
             : $shift->shift_end_time;
 
         return $checkOutTime < $shiftEndTime;
+    }
+
+    /**
+     * Resolve an image path to a full URL using the img service.
+     */
+    private function resolveImageUrl(?string $path): ?string
+    {
+        if (! $path) {
+            return null;
+        }
+
+        // Already a full URL
+        if (str_starts_with($path, 'http')) {
+            return $path;
+        }
+
+        // Image stored in the dedicated img service
+        $imgBaseUrl = rtrim(env('IMG_SERVICE_URL', 'https://img.sagansa.id'), '/');
+
+        return "{$imgBaseUrl}/storage/{$path}";
     }
 
     /**

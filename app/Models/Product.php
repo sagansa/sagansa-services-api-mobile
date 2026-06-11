@@ -109,11 +109,15 @@ class Product extends Model
             return null;
         }
 
-        if (filter_var($this->image, FILTER_VALIDATE_URL)) {
+        // Already a full URL
+        if (str_starts_with($this->image, 'http')) {
             return $this->image;
         }
 
-        return Storage::disk('public')->url($this->image);
+        // Image stored in the dedicated img service
+        $imgBaseUrl = rtrim(env('IMG_SERVICE_URL', 'https://img.sagansa.id'), '/');
+
+        return "{$imgBaseUrl}/storage/{$this->image}";
     }
 
     public function getBundleAvailableStockAttribute(): ?int
