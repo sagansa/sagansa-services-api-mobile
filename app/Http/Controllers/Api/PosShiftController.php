@@ -13,6 +13,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Http\Exceptions\HttpResponseException;
 
 class PosShiftController extends Controller
 {
@@ -64,6 +66,13 @@ class PosShiftController extends Controller
 
     public function open(Request $request): JsonResponse
     {
+        if (! $this->supportsShiftStockControl()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'POS shift stock control tables are not available. Run the latest ops migrations first.',
+            ], 409);
+        }
+
         $validated = $request->validate([
             'store_id' => ['required', 'uuid', 'exists:stores,id'],
             'business_date' => ['nullable', 'date'],
@@ -99,7 +108,7 @@ class PosShiftController extends Controller
                 ->first();
 
             if ($existingOpenShift) {
-                abort(response()->json([
+                throw new HttpResponseException(response()->json([
                     'success' => false,
                     'message' => 'Store still has an open shift. Close it before opening a new shift.',
                     'data' => $this->serializeShift($existingOpenShift),
@@ -114,7 +123,7 @@ class PosShiftController extends Controller
                 ->first();
 
             if ($previousOpenShift) {
-                abort(response()->json([
+                throw new HttpResponseException(response()->json([
                     'success' => false,
                     'message' => 'Previous business date shift must be closed first.',
                     'data' => $this->serializeShift($previousOpenShift),
@@ -147,24 +156,29 @@ class PosShiftController extends Controller
                     : null;
 
                 if ($openingVariance !== null && $openingVariance !== 0 && empty($payload['opening_variance_note'])) {
-                    abort(response()->json([
+                    throw new HttpResponseException(response()->json([
                         'success' => false,
                         'message' => 'Opening variance note is required when opening stock differs from previous close.',
                         'errors' => ['items' => ["Opening variance note required for product {$productId}."]],
                     ], 422));
                 }
 
-                PosShiftStockItem::create([
+                $stockItemPayload = [
                     'shift_session_id' => $shift->id,
                     'product_id' => $productId,
                     'opening_stock' => $openingStock,
                     'addition_stock' => 0,
-                    'adjustment_stock' => 0,
                     'sold_quantity' => 0,
                     'expected_closing_stock' => $openingStock,
                     'opening_variance' => $openingVariance,
                     'opening_variance_note' => $payload['opening_variance_note'] ?? null,
-                ]);
+                ];
+
+                if ($this->supportsAdjustmentStock()) {
+                    $stockItemPayload['adjustment_stock'] = 0;
+                }
+
+                PosShiftStockItem::create($stockItemPayload);
 
                 PosShiftStockMovement::create([
                     'shift_session_id' => $shift->id,
@@ -265,6 +279,13 @@ class PosShiftController extends Controller
 
     public function adjustStock(Request $request, string $shift): JsonResponse
     {
+        if (! $this->supportsAdjustmentStock()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Stock adjustment is not available until the latest stock migration is applied.',
+            ], 409);
+        }
+
         $validated = $request->validate([
             'product_id' => ['required', 'uuid', 'exists:products,id'],
             'quantity' => ['required', 'integer', 'not_in:0'],
@@ -482,7 +503,7 @@ class PosShiftController extends Controller
                     ] : null,
                     'opening_stock' => (int) $item->opening_stock,
                     'addition_stock' => (int) $item->addition_stock,
-                    'adjustment_stock' => (int) $item->adjustment_stock,
+                    'adjustment_stock' => $this->supportsAdjustmentStock() ? (int) $item->adjustment_stock : 0,
                     'sold_quantity' => (int) $item->sold_quantity,
                     'expected_closing_stock' => (int) $item->expected_closing_stock,
                     'actual_closing_stock' => $item->actual_closing_stock !== null ? (int) $item->actual_closing_stock : null,
@@ -493,5 +514,18 @@ class PosShiftController extends Controller
                 ];
             })->values(),
         ];
+    }
+
+    private function supportsAdjustmentStock(): bool
+    {
+        return Schema::hasColumn('pos_shift_stock_items', 'adjustment_stock');
+    }
+
+    private function supportsShiftStockControl(): bool
+    {
+        return Schema::hasTable('pos_shift_sessions')
+            && Schema::hasTable('pos_shift_stock_items')
+            && Schema::hasTable('pos_shift_stock_movements')
+            && Schema::hasTable('pos_shift_audit_logs');
     }
 }
