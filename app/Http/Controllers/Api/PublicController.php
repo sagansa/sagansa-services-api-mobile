@@ -104,7 +104,9 @@ class PublicController extends Controller
                     $q->withoutGlobalScopes();
                 },
                 'modifications' => function($q) {
-                    $q->withoutGlobalScopes();
+                    $q->withoutGlobalScopes()->with(['linkedProduct' => function($linkedQuery) {
+                        $linkedQuery->withoutGlobalScopes();
+                    }]);
                 },
                 'bundleItems.componentProduct' => function($q) {
                     $q->withoutGlobalScopes();

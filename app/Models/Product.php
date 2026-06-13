@@ -83,6 +83,35 @@ class Product extends Model
                 ->values()
                 ->all();
         }
+
+        if ($this->relationLoaded('modifications')) {
+            $array['modifications'] = $this->getRelation('modifications')
+                ->map(function ($modification) {
+                    $linkedProduct = $modification->relationLoaded('linkedProduct')
+                        ? $modification->getRelation('linkedProduct')
+                        : null;
+
+                    return [
+                        'id' => $modification->id,
+                        'name' => $modification->name,
+                        'price' => (float) $modification->price,
+                        'is_active' => (bool) $modification->is_active,
+                        'linked_product_id' => $modification->linked_product_id,
+                        'linked_product_quantity' => $modification->linked_product_quantity !== null
+                            ? (int) $modification->linked_product_quantity
+                            : null,
+                        'linked_product' => $linkedProduct ? [
+                            'id' => $linkedProduct->id,
+                            'name' => $linkedProduct->name,
+                            'price' => (int) $linkedProduct->price,
+                            'stock' => (int) $linkedProduct->stock,
+                            'is_active' => (bool) $linkedProduct->is_active,
+                        ] : null,
+                    ];
+                })
+                ->values()
+                ->all();
+        }
         
         return $array;
     }
@@ -162,7 +191,7 @@ class Product extends Model
     public function stores()
     {
         return $this->belongsToMany(Store::class, 'product_store')
-            ->withPivot('price')
+            ->withPivot('price', 'stock')
             ->withTimestamps();
     }
 

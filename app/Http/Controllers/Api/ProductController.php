@@ -115,7 +115,9 @@ class ProductController extends Controller
                 $q->withoutGlobalScopes();
             },
             'modifications' => function($q) {
-                $q->withoutGlobalScopes();
+                $q->withoutGlobalScopes()->with(['linkedProduct' => function($linkedQuery) {
+                    $linkedQuery->withoutGlobalScopes();
+                }]);
             },
             'bundleItems.componentProduct' => function($q) {
                 $q->withoutGlobalScopes();
@@ -244,7 +246,9 @@ class ProductController extends Controller
                         $q->withoutGlobalScopes();
                     },
                     'modifications' => function($q) {
-                        $q->withoutGlobalScopes();
+                        $q->withoutGlobalScopes()->with(['linkedProduct' => function($linkedQuery) {
+                            $linkedQuery->withoutGlobalScopes();
+                        }]);
                     },
                     'bundleItems.componentProduct' => function($q) {
                         $q->withoutGlobalScopes();
@@ -271,7 +275,9 @@ class ProductController extends Controller
                         $q->withoutGlobalScopes();
                     },
                     'modifications' => function($q) {
-                        $q->withoutGlobalScopes();
+                        $q->withoutGlobalScopes()->with(['linkedProduct' => function($linkedQuery) {
+                            $linkedQuery->withoutGlobalScopes();
+                        }]);
                     },
                     'bundleItems.componentProduct' => function($q) {
                         $q->withoutGlobalScopes();
@@ -398,7 +404,7 @@ class ProductController extends Controller
         }
 
         // Load relationships
-        $product->load(['variants', 'modifications']);
+        $product->load(['variants', 'modifications.linkedProduct']);
 
         return response()->json([
             'success' => true,
@@ -489,7 +495,7 @@ class ProductController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Product updated successfully',
-            'data' => $product->load(['variants', 'modifications', 'stores'])
+            'data' => $product->load(['variants', 'modifications.linkedProduct', 'stores'])
         ]);
     }
 

@@ -123,7 +123,7 @@ class GuestOrderController extends Controller
                     ->map(function ($modData) {
                         $modificationId = $modData['product_modification_id'] ?? null;
                         $modification = $modificationId
-                            ? ProductModification::withoutGlobalScope('tenant')->find($modificationId)
+                            ? ProductModification::withoutGlobalScope('tenant')->with('linkedProduct')->find($modificationId)
                             : null;
 
                         return [
@@ -131,6 +131,13 @@ class GuestOrderController extends Controller
                             'name' => $modification?->name,
                             'price' => $modData['price'] ?? 0,
                             'quantity' => $modData['quantity'] ?? 1,
+                            'linked_product_id' => $modification?->linked_product_id,
+                            'linked_product_quantity' => $modification?->linked_product_quantity,
+                            'linked_product' => $modification?->linkedProduct ? [
+                                'id' => $modification->linkedProduct->id,
+                                'name' => $modification->linkedProduct->name,
+                                'stock' => (int) $modification->linkedProduct->stock,
+                            ] : null,
                         ];
                     })
                     ->values()
@@ -154,6 +161,8 @@ class GuestOrderController extends Controller
                     ] : null,
                     'modifications_snapshot' => $modificationsSnapshot,
                 ]);
+
+                $this->deductStockForOrderItem($itemData);
             }
 
             DB::commit();
@@ -169,5 +178,69 @@ class GuestOrderController extends Controller
                 'message' => 'Failed to create order: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    private function deductStockForOrderItem(array $itemData): void
+    {
+        $orderQuantity = max(1, (int) ($itemData['quantity'] ?? 1));
+
+        if (!empty($itemData['product_id'])) {
+            $product = Product::withoutGlobalScope('tenant')
+                ->with(['bundleItems.componentProduct'])
+                ->lockForUpdate()
+                ->find($itemData['product_id']);
+
+            if ($product) {
+                if (($product->type ?: 'single') === 'bundle') {
+                    foreach ($product->bundleItems as $bundleItem) {
+                        $this->decrementTrackedProductStock(
+                            (string) $bundleItem->component_product_id,
+                            max(1, (int) $bundleItem->quantity) * $orderQuantity
+                        );
+                    }
+                } else {
+                    $this->decrementTrackedProductStock((string) $product->id, $orderQuantity);
+                }
+            }
+        }
+
+        foreach (($itemData['modifications'] ?? []) as $modificationData) {
+            $modificationId = $modificationData['product_modification_id'] ?? $modificationData['id'] ?? null;
+            if (!$modificationId) {
+                continue;
+            }
+
+            $modification = ProductModification::withoutGlobalScope('tenant')->find($modificationId);
+            if (!$modification?->linked_product_id) {
+                continue;
+            }
+
+            $modificationQuantity = max(1, (int) ($modificationData['quantity'] ?? 1));
+            $linkedQuantity = max(1, (int) ($modification->linked_product_quantity ?? 1));
+
+            $this->decrementTrackedProductStock(
+                (string) $modification->linked_product_id,
+                $orderQuantity * $modificationQuantity * $linkedQuantity
+            );
+        }
+    }
+
+    private function decrementTrackedProductStock(string $productId, int $quantity): void
+    {
+        if ($quantity < 1) {
+            return;
+        }
+
+        $product = Product::withoutGlobalScope('tenant')
+            ->lockForUpdate()
+            ->find($productId);
+
+        if (!$product || !$product->remaining) {
+            return;
+        }
+
+        $product->update([
+            'stock' => max(0, (int) $product->stock - $quantity),
+        ]);
     }
 }

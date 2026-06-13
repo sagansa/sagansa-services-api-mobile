@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\CustomerTypeController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\PaymentMethodController;
+use App\Http\Controllers\Api\PosShiftController;
 use App\Http\Controllers\Api\PrinterController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\RefundController;
@@ -73,6 +74,14 @@ Route::middleware(['auth:sanctum', 'active.tenant'])->group(function () {
     Route::get('/shifts/current', [ShiftController::class, 'current']);
     Route::post('/shifts/open', [ShiftController::class, 'open']);
     Route::post('/shifts/close', [ShiftController::class, 'close']);
+
+    // POS shift stock control.
+    Route::get('/pos/shifts/active', [PosShiftController::class, 'active']);
+    Route::get('/pos/shifts/opening-products', [PosShiftController::class, 'openingProducts']);
+    Route::post('/pos/shifts/open', [PosShiftController::class, 'open']);
+    Route::get('/pos/shifts/{shift}/stock', [PosShiftController::class, 'stock']);
+    Route::post('/pos/shifts/{shift}/stock-additions', [PosShiftController::class, 'addStock']);
+    Route::post('/pos/shifts/{shift}/close', [PosShiftController::class, 'close']);
 
     // Customer records selected during checkout.
     Route::get('/customers', [CustomerController::class, 'index']);

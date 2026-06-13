@@ -15,6 +15,7 @@ class Order extends Model
     protected $fillable = [
         'tenant_id',
         'store_id',
+        'shift_session_id',
         'created_by',
         'customer_id',
         'customer_name',
@@ -53,6 +54,7 @@ class Order extends Model
         'id' => 'string',
         'tenant_id' => 'string',
         'store_id' => 'string',
+        'shift_session_id' => 'string',
         'created_by' => 'string',
         'subtotal' => 'decimal:2',
         'tax_total' => 'decimal:2',

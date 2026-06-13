@@ -6,8 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderItemModification;
+use App\Models\PosShiftSession;
+use App\Models\PosShiftStockItem;
+use App\Models\PosShiftStockMovement;
 use App\Models\Store;
 use App\Models\Product;
+use App\Models\ProductModification;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantCombination;
 use App\Models\Refund;
@@ -106,9 +110,36 @@ class OrderController extends Controller
                 $paymentStatus = 'paid';
             }
 
+            $activeShift = PosShiftSession::query()
+                ->where('store_id', $request->store_id)
+                ->where('status', PosShiftSession::STATUS_OPEN)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $activeShift) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Open shift is required before creating POS orders.',
+                ], 422);
+            }
+
+            if ($activeShift->business_date && $activeShift->business_date->toDateString() < now()->toDateString()) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Previous business date shift must be closed before creating new orders.',
+                    'data' => $activeShift,
+                ], 409);
+            }
+
+            $trackedConsumption = $this->collectTrackedStockConsumption($request->order_items);
+            $this->assertShiftStockAvailable($activeShift, $trackedConsumption);
+
             $order = Order::create([
                 'tenant_id' => $store->tenant_id, // Use store's tenant_id for cross-tenant support
                 'store_id' => $request->store_id,
+                'shift_session_id' => $activeShift->id,
                 'created_by' => $userKey,
                 'customer_id' => $request->customer_id,
                 'customer_name' => $request->customer_name,
@@ -180,7 +211,10 @@ class OrderController extends Controller
                     'modifications_snapshot' => $modificationsSnapshot,
                 ]);
 
-                // No need to create separate modification records - they're in the snapshot
+                if (!in_array($request->status, ['cancelled', 'refunded'], true)) {
+                    $this->deductStockForOrderItem($itemData, (int) $itemData['quantity']);
+                    $this->recordShiftSaleForOrderItem($activeShift, $order, $orderItem, $itemData, (int) $itemData['quantity'], $userKey);
+                }
             }
 
             // Create OrderPayment record
@@ -217,6 +251,198 @@ class OrderController extends Controller
                 'message' => 'Failed to create order: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine()
             ], 500);
         }
+    }
+
+    private function deductStockForOrderItem(array $itemData, int $orderQuantity): void
+    {
+        if (!empty($itemData['product_id'])) {
+            $product = Product::withoutGlobalScope('tenant')
+                ->with(['bundleItems.componentProduct'])
+                ->lockForUpdate()
+                ->find($itemData['product_id']);
+
+            if ($product) {
+                if (($product->type ?: 'single') === 'bundle') {
+                    foreach ($product->bundleItems as $bundleItem) {
+                        $this->decrementTrackedProductStock(
+                            (string) $bundleItem->component_product_id,
+                            max(1, (int) $bundleItem->quantity) * $orderQuantity
+                        );
+                    }
+                } else {
+                    $this->decrementTrackedProductStock((string) $product->id, $orderQuantity);
+                }
+            }
+        }
+
+        foreach (($itemData['modifications'] ?? []) as $modificationData) {
+            $modificationId = $modificationData['product_modification_id'] ?? $modificationData['id'] ?? null;
+            if (!$modificationId) {
+                continue;
+            }
+
+            $modification = ProductModification::withoutGlobalScope('tenant')
+                ->with('linkedProduct')
+                ->find($modificationId);
+
+            if (!$modification?->linked_product_id) {
+                continue;
+            }
+
+            $modificationQuantity = max(1, (int) ($modificationData['quantity'] ?? 1));
+            $linkedQuantity = max(1, (int) ($modification->linked_product_quantity ?? 1));
+
+            $this->decrementTrackedProductStock(
+                (string) $modification->linked_product_id,
+                $orderQuantity * $modificationQuantity * $linkedQuantity
+            );
+        }
+    }
+
+    private function collectTrackedStockConsumption(array $orderItems): array
+    {
+        $consumption = [];
+
+        foreach ($orderItems as $itemData) {
+            $quantity = max(1, (int) ($itemData['quantity'] ?? 1));
+
+            foreach ($this->trackedProductsForOrderItem($itemData, $quantity) as $productId => $trackedQuantity) {
+                $consumption[$productId] = ($consumption[$productId] ?? 0) + $trackedQuantity;
+            }
+        }
+
+        return $consumption;
+    }
+
+    private function trackedProductsForOrderItem(array $itemData, int $orderQuantity): array
+    {
+        $tracked = [];
+
+        if (!empty($itemData['product_id'])) {
+            $product = Product::withoutGlobalScope('tenant')
+                ->with(['bundleItems.componentProduct'])
+                ->find($itemData['product_id']);
+
+            if ($product) {
+                if (($product->type ?: 'single') === 'bundle') {
+                    foreach ($product->bundleItems as $bundleItem) {
+                        $component = $bundleItem->componentProduct;
+                        if ($component?->remaining) {
+                            $productId = (string) $bundleItem->component_product_id;
+                            $tracked[$productId] = ($tracked[$productId] ?? 0)
+                                + max(1, (int) $bundleItem->quantity) * $orderQuantity;
+                        }
+                    }
+                } elseif ($product->remaining) {
+                    $productId = (string) $product->id;
+                    $tracked[$productId] = ($tracked[$productId] ?? 0) + $orderQuantity;
+                }
+            }
+        }
+
+        foreach (($itemData['modifications'] ?? []) as $modificationData) {
+            $modificationId = $modificationData['product_modification_id'] ?? $modificationData['id'] ?? null;
+            if (!$modificationId) {
+                continue;
+            }
+
+            $modification = ProductModification::withoutGlobalScope('tenant')
+                ->with('linkedProduct')
+                ->find($modificationId);
+
+            if (!$modification?->linked_product_id || !$modification->linkedProduct?->remaining) {
+                continue;
+            }
+
+            $modificationQuantity = max(1, (int) ($modificationData['quantity'] ?? 1));
+            $linkedQuantity = max(1, (int) ($modification->linked_product_quantity ?? 1));
+            $productId = (string) $modification->linked_product_id;
+            $tracked[$productId] = ($tracked[$productId] ?? 0)
+                + $orderQuantity * $modificationQuantity * $linkedQuantity;
+        }
+
+        return $tracked;
+    }
+
+    private function assertShiftStockAvailable(PosShiftSession $shift, array $consumption): void
+    {
+        foreach ($consumption as $productId => $quantity) {
+            $item = PosShiftStockItem::where('shift_session_id', $shift->id)
+                ->where('product_id', $productId)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$item) {
+                abort(response()->json([
+                    'success' => false,
+                    'message' => 'Tracked product is missing from active shift stock.',
+                    'errors' => ['product_id' => [$productId]],
+                ], 422));
+            }
+
+            $item->recalculateExpected();
+            if ((int) $item->expected_closing_stock < (int) $quantity) {
+                abort(response()->json([
+                    'success' => false,
+                    'message' => 'Insufficient shift stock for tracked product.',
+                    'errors' => ['product_id' => [$productId]],
+                ], 422));
+            }
+        }
+    }
+
+    private function recordShiftSaleForOrderItem(
+        PosShiftSession $shift,
+        Order $order,
+        OrderItem $orderItem,
+        array $itemData,
+        int $orderQuantity,
+        string $userKey
+    ): void {
+        foreach ($this->trackedProductsForOrderItem($itemData, $orderQuantity) as $productId => $quantity) {
+            $item = PosShiftStockItem::where('shift_session_id', $shift->id)
+                ->where('product_id', $productId)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$item) {
+                continue;
+            }
+
+            $item->sold_quantity = (int) $item->sold_quantity + (int) $quantity;
+            $item->recalculateExpected();
+            $item->save();
+
+            PosShiftStockMovement::create([
+                'shift_session_id' => $shift->id,
+                'product_id' => $productId,
+                'order_id' => $order->id,
+                'order_item_id' => $orderItem->id,
+                'type' => PosShiftStockMovement::TYPE_SALE,
+                'quantity' => -1 * (int) $quantity,
+                'note' => 'Order sale',
+                'created_by_user_id' => $userKey,
+            ]);
+        }
+    }
+
+    private function decrementTrackedProductStock(string $productId, int $quantity): void
+    {
+        if ($quantity < 1) {
+            return;
+        }
+
+        $product = Product::withoutGlobalScope('tenant')
+            ->lockForUpdate()
+            ->find($productId);
+
+        if (!$product || !$product->remaining) {
+            return;
+        }
+
+        $product->update([
+            'stock' => max(0, (int) $product->stock - $quantity),
+        ]);
     }
 
     /**
