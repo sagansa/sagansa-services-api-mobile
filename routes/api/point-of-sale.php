@@ -81,6 +81,7 @@ Route::middleware(['auth:sanctum', 'active.tenant'])->group(function () {
     Route::post('/pos/shifts/open', [PosShiftController::class, 'open']);
     Route::get('/pos/shifts/{shift}/stock', [PosShiftController::class, 'stock']);
     Route::post('/pos/shifts/{shift}/stock-additions', [PosShiftController::class, 'addStock']);
+    Route::post('/pos/shifts/{shift}/stock-adjustments', [PosShiftController::class, 'adjustStock']);
     Route::post('/pos/shifts/{shift}/close', [PosShiftController::class, 'close']);
 
     // Customer records selected during checkout.

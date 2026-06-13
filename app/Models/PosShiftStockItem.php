@@ -17,6 +17,7 @@ class PosShiftStockItem extends Model
         'product_id',
         'opening_stock',
         'addition_stock',
+        'adjustment_stock',
         'sold_quantity',
         'expected_closing_stock',
         'actual_closing_stock',
@@ -31,6 +32,7 @@ class PosShiftStockItem extends Model
         return [
             'opening_stock' => 'integer',
             'addition_stock' => 'integer',
+            'adjustment_stock' => 'integer',
             'sold_quantity' => 'integer',
             'expected_closing_stock' => 'integer',
             'actual_closing_stock' => 'integer',
@@ -53,6 +55,7 @@ class PosShiftStockItem extends Model
     {
         $this->expected_closing_stock = (int) $this->opening_stock
             + (int) $this->addition_stock
+            + (int) $this->adjustment_stock
             - (int) $this->sold_quantity;
     }
 }

@@ -159,6 +159,7 @@ class PosShiftController extends Controller
                     'product_id' => $productId,
                     'opening_stock' => $openingStock,
                     'addition_stock' => 0,
+                    'adjustment_stock' => 0,
                     'sold_quantity' => 0,
                     'expected_closing_stock' => $openingStock,
                     'opening_variance' => $openingVariance,
@@ -258,6 +259,76 @@ class PosShiftController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Stock addition saved.',
+            'data' => $this->serializeShift($session->refresh()),
+        ]);
+    }
+
+    public function adjustStock(Request $request, string $shift): JsonResponse
+    {
+        $validated = $request->validate([
+            'product_id' => ['required', 'uuid', 'exists:products,id'],
+            'quantity' => ['required', 'integer', 'not_in:0'],
+            'reason' => ['required', 'string', 'max:64'],
+            'note' => ['required', 'string'],
+        ]);
+
+        $user = Auth::user();
+        $userId = $user?->uuid ?: $user?->id;
+
+        $session = DB::transaction(function () use ($shift, $validated, $userId) {
+            $session = PosShiftSession::query()->lockForUpdate()->findOrFail($shift);
+            if (! $session->isOpen()) {
+                abort(response()->json([
+                    'success' => false,
+                    'message' => 'Cannot adjust stock on a closed shift.',
+                ], 422));
+            }
+
+            $item = PosShiftStockItem::query()
+                ->where('shift_session_id', $session->id)
+                ->where('product_id', $validated['product_id'])
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $quantity = (int) $validated['quantity'];
+            $before = $item->toArray();
+            $item->adjustment_stock = (int) $item->adjustment_stock + $quantity;
+            $item->recalculateExpected();
+
+            if ((int) $item->expected_closing_stock < 0) {
+                abort(response()->json([
+                    'success' => false,
+                    'message' => 'Stock adjustment cannot make expected closing stock negative.',
+                ], 422));
+            }
+
+            $item->save();
+
+            $note = '[' . $validated['reason'] . '] ' . $validated['note'];
+            PosShiftStockMovement::create([
+                'shift_session_id' => $session->id,
+                'product_id' => $item->product_id,
+                'type' => PosShiftStockMovement::TYPE_CORRECTION,
+                'quantity' => $quantity,
+                'note' => $note,
+                'created_by_user_id' => $userId,
+            ]);
+
+            PosShiftAuditLog::create([
+                'shift_session_id' => $session->id,
+                'action' => 'stock_adjustment',
+                'before_payload' => $before,
+                'after_payload' => $item->fresh()->toArray(),
+                'reason' => $note,
+                'created_by_user_id' => $userId,
+            ]);
+
+            return $session;
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Stock adjustment saved.',
             'data' => $this->serializeShift($session->refresh()),
         ]);
     }
@@ -411,6 +482,7 @@ class PosShiftController extends Controller
                     ] : null,
                     'opening_stock' => (int) $item->opening_stock,
                     'addition_stock' => (int) $item->addition_stock,
+                    'adjustment_stock' => (int) $item->adjustment_stock,
                     'sold_quantity' => (int) $item->sold_quantity,
                     'expected_closing_stock' => (int) $item->expected_closing_stock,
                     'actual_closing_stock' => $item->actual_closing_stock !== null ? (int) $item->actual_closing_stock : null,
