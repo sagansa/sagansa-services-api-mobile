@@ -13,8 +13,10 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Throwable;
 
 class PosShiftController extends Controller
 {
@@ -100,7 +102,8 @@ class PosShiftController extends Controller
             ], 422);
         }
 
-        $shift = DB::transaction(function () use ($storeId, $businessDate, $validated, $payloadItems, $trackedProductIds, $user, $userId) {
+        try {
+            $shift = DB::transaction(function () use ($storeId, $businessDate, $validated, $payloadItems, $trackedProductIds, $user, $userId) {
             $existingOpenShift = PosShiftSession::query()
                 ->where('store_id', $storeId)
                 ->where('status', PosShiftSession::STATUS_OPEN)
@@ -198,7 +201,27 @@ class PosShiftController extends Controller
             ]);
 
             return $shift;
-        });
+            });
+        } catch (HttpResponseException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            Log::error('Failed to open POS stock shift.', [
+                'store_id' => $storeId,
+                'business_date' => $businessDate,
+                'user_id' => $userId,
+                'tracked_product_count' => count($trackedProductIds),
+                'payload_item_count' => $payloadItems->count(),
+                'exception' => get_class($exception),
+                'message' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => config('app.debug')
+                    ? 'Failed to open POS stock shift: ' . $exception->getMessage()
+                    : 'Failed to open POS stock shift. Please contact admin.',
+            ], 500);
+        }
 
         return response()->json([
             'success' => true,
