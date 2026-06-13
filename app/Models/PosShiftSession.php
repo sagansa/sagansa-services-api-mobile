@@ -49,12 +49,12 @@ class PosShiftSession extends Model
 
     public function opener()
     {
-        return $this->belongsTo(User::class, 'opened_by_user_id', 'uuid');
+        return $this->belongsTo(User::class, 'opened_by_user_id', 'uuid')->withoutGlobalScope('tenant');
     }
 
     public function closer()
     {
-        return $this->belongsTo(User::class, 'closed_by_user_id', 'uuid');
+        return $this->belongsTo(User::class, 'closed_by_user_id', 'uuid')->withoutGlobalScope('tenant');
     }
 
     public function stockItems()
