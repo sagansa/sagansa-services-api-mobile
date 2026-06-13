@@ -41,13 +41,21 @@ class AuthController extends Controller
         }
 
         $plainTextToken = $user->createToken('api-mobile')->plainTextToken;
-        
+
+        $effectiveRole = $this->resolveEffectiveRole($user);
+
+        // Owner and manager always get access-attendance permission
+        $permissionNames = $user->getAllPermissions()->pluck('name')->toArray();
+        if (in_array($effectiveRole, ['owner', 'manager'], true) && !in_array('access-attendance', $permissionNames, true)) {
+            $permissionNames[] = 'access-attendance';
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Login berhasil',
             'user' => $this->transformUser($user),
-            'roles' => [],
-            'permissions' => [],
+            'roles' => [$effectiveRole],
+            'permissions' => $permissionNames,
             'token' => $plainTextToken,
             'token_type' => 'Bearer',
         ]);
@@ -98,12 +106,20 @@ class AuthController extends Controller
 
     public function validateToken(Request $request): JsonResponse
     {
+        $user = $request->user();
+        $effectiveRole = $this->resolveEffectiveRole($user);
+
+        $permissionNames = $user->getAllPermissions()->pluck('name')->toArray();
+        if (in_array($effectiveRole, ['owner', 'manager'], true) && !in_array('access-attendance', $permissionNames, true)) {
+            $permissionNames[] = 'access-attendance';
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Token valid',
-            'user' => $this->transformUser($request->user()),
-            'roles' => [],
-            'permissions' => [],
+            'user' => $this->transformUser($user),
+            'roles' => [$effectiveRole],
+            'permissions' => $permissionNames,
         ]);
     }
 
