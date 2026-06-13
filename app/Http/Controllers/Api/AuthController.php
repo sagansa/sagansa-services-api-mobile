@@ -3,12 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Tenant;
 use App\Models\User;
+use Throwable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Carbon;
@@ -44,11 +45,7 @@ class AuthController extends Controller
 
         $effectiveRole = $this->resolveEffectiveRole($user);
 
-        // Owner and manager always get access-attendance permission
-        $permissionNames = $user->getAllPermissions()->pluck('name')->toArray();
-        if (in_array($effectiveRole, ['owner', 'manager'], true) && !in_array('access-attendance', $permissionNames, true)) {
-            $permissionNames[] = 'access-attendance';
-        }
+        $permissionNames = $this->resolvePermissionNames($user, $effectiveRole);
 
         return response()->json([
             'success' => true,
@@ -109,10 +106,7 @@ class AuthController extends Controller
         $user = $request->user();
         $effectiveRole = $this->resolveEffectiveRole($user);
 
-        $permissionNames = $user->getAllPermissions()->pluck('name')->toArray();
-        if (in_array($effectiveRole, ['owner', 'manager'], true) && !in_array('access-attendance', $permissionNames, true)) {
-            $permissionNames[] = 'access-attendance';
-        }
+        $permissionNames = $this->resolvePermissionNames($user, $effectiveRole);
 
         return response()->json([
             'success' => true,
@@ -206,7 +200,14 @@ class AuthController extends Controller
         $userKey = (string) ($user->uuid ?: $user->id);
         $role = strtolower((string) ($user->role ?? 'staff'));
 
-        if ($tenantId && Tenant::where('id', $tenantId)->where('owner_id', $userKey)->exists()) {
+        if (
+            $tenantId
+            && Schema::connection('mysql_auth')->hasTable('tenants')
+            && DB::connection('mysql_auth')->table('tenants')
+                ->where('id', $tenantId)
+                ->where('owner_id', $userKey)
+                ->exists()
+        ) {
             return 'owner';
         }
 
@@ -221,13 +222,20 @@ class AuthController extends Controller
             }
         }
 
-        if (method_exists($user, 'hasRole')) {
-            if ($user->hasRole('owner')) {
-                return 'owner';
+        try {
+            if (method_exists($user, 'hasRole')) {
+                if ($user->hasRole('owner')) {
+                    return 'owner';
+                }
+                if ($user->hasRole('manager')) {
+                    return 'manager';
+                }
             }
-            if ($user->hasRole('manager')) {
-                return 'manager';
-            }
+        } catch (Throwable $exception) {
+            Log::warning('Failed to resolve mobile user role through Spatie permission.', [
+                'user_id' => $user->uuid ?: $user->id,
+                'message' => $exception->getMessage(),
+            ]);
         }
 
         return $role;
@@ -239,18 +247,26 @@ class AuthController extends Controller
             return true;
         }
 
-        $tenant = Tenant::where('owner_id', $user->uuid)->first();
+        $tenantId = null;
 
-        if (! $tenant) {
-            $tenant = $user->tenants()->first();
+        if (Schema::connection('mysql_auth')->hasTable('tenants')) {
+            $tenantId = DB::connection('mysql_auth')->table('tenants')
+                ->where('owner_id', $user->uuid)
+                ->value('id');
         }
 
-        if (! $tenant) {
+        if (! $tenantId && Schema::connection('mysql_auth')->hasTable('tenant_user')) {
+            $tenantId = DB::connection('mysql_auth')->table('tenant_user')
+                ->where('user_id', $user->uuid)
+                ->value('tenant_id');
+        }
+
+        if (! $tenantId) {
             return false;
         }
 
-        DB::transaction(function () use ($user, $tenant) {
-            $user->tenant_id = $tenant->id;
+        DB::connection('mysql_auth')->transaction(function () use ($user, $tenantId) {
+            $user->tenant_id = $tenantId;
             $user->save();
         });
 
@@ -258,5 +274,73 @@ class AuthController extends Controller
         $user->load('detail');
 
         return (bool) $user->tenant_id;
+    }
+
+    private function resolvePermissionNames(User $user, string $effectiveRole): array
+    {
+        $permissions = [];
+        $connection = DB::connection('mysql_auth');
+        $schema = Schema::connection('mysql_auth');
+
+        try {
+            if ($schema->hasTable('permissions')) {
+                if ($effectiveRole === 'owner') {
+                    $permissions = $connection->table('permissions')
+                        ->pluck('name')
+                        ->filter()
+                        ->map(fn ($permission) => (string) $permission)
+                        ->values()
+                        ->all();
+                } elseif (
+                    $schema->hasTable('roles')
+                    && $schema->hasTable('role_has_permissions')
+                ) {
+                    $rolePermissions = $connection->table('permissions')
+                        ->join('role_has_permissions', 'permissions.id', '=', 'role_has_permissions.permission_id')
+                        ->join('roles', 'roles.id', '=', 'role_has_permissions.role_id')
+                        ->where('roles.name', $effectiveRole)
+                        ->pluck('permissions.name')
+                        ->filter()
+                        ->map(fn ($permission) => (string) $permission)
+                        ->values()
+                        ->all();
+
+                    $permissions = array_merge($permissions, $rolePermissions);
+                }
+
+                if ($schema->hasTable('model_has_permissions')) {
+                    $userKeys = array_values(array_unique(array_filter([
+                        (string) ($user->uuid ?: ''),
+                        (string) $user->id,
+                    ])));
+
+                    if (! empty($userKeys)) {
+                        $directPermissions = $connection->table('permissions')
+                            ->join('model_has_permissions', 'permissions.id', '=', 'model_has_permissions.permission_id')
+                            ->whereIn('model_has_permissions.model_id', $userKeys)
+                            ->pluck('permissions.name')
+                            ->filter()
+                            ->map(fn ($permission) => (string) $permission)
+                            ->values()
+                            ->all();
+
+                        $permissions = array_merge($permissions, $directPermissions);
+                    }
+                }
+            }
+        } catch (Throwable $exception) {
+            Log::warning('Failed to resolve mobile user permissions.', [
+                'user_id' => $user->uuid ?: $user->id,
+                'role' => $effectiveRole,
+                'message' => $exception->getMessage(),
+            ]);
+        }
+
+        if (in_array($effectiveRole, ['owner', 'manager'], true)) {
+            $permissions[] = 'access-attendance';
+            $permissions[] = 'access-pos';
+        }
+
+        return array_values(array_unique(array_filter($permissions)));
     }
 }
