@@ -148,13 +148,40 @@ class ProductController extends Controller
             ]);
         }
 
+        $activeShiftStock = collect();
+        if ($storeId) {
+            $activeShift = \App\Models\PosShiftSession::where('store_id', $storeId)
+                ->where('status', \App\Models\PosShiftSession::STATUS_OPEN)
+                ->first();
+                
+            if ($activeShift) {
+                $activeShiftStock = \App\Models\PosShiftStockItem::where('shift_session_id', $activeShift->id)
+                    ->pluck('expected_closing_stock', 'product_id');
+                \Log::info('ProductController: Loaded active shift stock', [
+                    'shift_id' => $activeShift->id,
+                    'stock_items_count' => $activeShiftStock->count(),
+                    'sample_keys' => $activeShiftStock->keys()->take(3)->toArray()
+                ]);
+            }
+        }
+
         // Transform products to include store-specific price if store_id is provided
         if ($storeId) {
-            $products = $products->map(function($product) {
+            $products = $products->map(function($product) use ($activeShiftStock) {
                 $storePrice = $product->stores->first();
                 if ($storePrice && $storePrice->pivot && $storePrice->pivot->price) {
                     $product->price = $storePrice->pivot->price;
                 }
+                
+                // Override stock with active shift stock if it's a tracked product
+                if ($product->remaining) {
+                    // Try to get stock, handling both string and object IDs just in case
+                    $productIdStr = (string) $product->id;
+                    if ($activeShiftStock->has($productIdStr)) {
+                        $product->stock = $activeShiftStock->get($productIdStr);
+                    }
+                }
+                
                 $this->applyBundleAvailability($product);
                 // Remove stores relationship from response to keep it clean
                 unset($product->stores);
@@ -302,6 +329,22 @@ class ProductController extends Controller
             }
             // Remove stores relationship from response
             unset($product->stores);
+        }
+
+        if ($storeId && $product->remaining) {
+            $activeShift = \App\Models\PosShiftSession::where('store_id', $storeId)
+                ->where('status', \App\Models\PosShiftSession::STATUS_OPEN)
+                ->first();
+                
+            if ($activeShift) {
+                $shiftStock = \App\Models\PosShiftStockItem::where('shift_session_id', $activeShift->id)
+                    ->where('product_id', $product->id)
+                    ->value('expected_closing_stock');
+                    
+                if ($shiftStock !== null) {
+                    $product->stock = $shiftStock;
+                }
+            }
         }
 
         $this->applyBundleAvailability($product);
