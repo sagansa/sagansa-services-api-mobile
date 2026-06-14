@@ -111,26 +111,7 @@ class PosShiftController extends Controller
                 ->first();
 
             if ($existingOpenShift) {
-                throw new HttpResponseException(response()->json([
-                    'success' => false,
-                    'message' => 'Store still has an open shift. Close it before opening a new shift.',
-                    'data' => $this->serializeShift($existingOpenShift),
-                ], 409));
-            }
-
-            $previousOpenShift = PosShiftSession::query()
-                ->where('store_id', $storeId)
-                ->where('business_date', '<', $businessDate)
-                ->where('status', PosShiftSession::STATUS_OPEN)
-                ->lockForUpdate()
-                ->first();
-
-            if ($previousOpenShift) {
-                throw new HttpResponseException(response()->json([
-                    'success' => false,
-                    'message' => 'Previous business date shift must be closed first.',
-                    'data' => $this->serializeShift($previousOpenShift),
-                ], 409));
+                return $existingOpenShift;
             }
 
             $shift = PosShiftSession::create([
