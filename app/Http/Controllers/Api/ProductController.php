@@ -181,6 +181,8 @@ class ProductController extends Controller
                         $product->stock = $activeShiftStock->get($productIdStr);
                     }
                 }
+
+                $this->applyShiftStockToRelatedProducts($product, $activeShiftStock);
                 
                 $this->applyBundleAvailability($product);
                 // Remove stores relationship from response to keep it clean
@@ -346,6 +348,18 @@ class ProductController extends Controller
                 if ($shiftStock !== null) {
                     $product->stock = $shiftStock;
                 }
+            }
+        }
+
+        if ($storeId) {
+            $activeShift = \App\Models\PosShiftSession::where('store_id', $storeId)
+                ->where('status', \App\Models\PosShiftSession::STATUS_OPEN)
+                ->first();
+
+            if ($activeShift) {
+                $activeShiftStock = \App\Models\PosShiftStockItem::where('shift_session_id', $activeShift->id)
+                    ->pluck('expected_closing_stock', 'product_id');
+                $this->applyShiftStockToRelatedProducts($product, $activeShiftStock);
             }
         }
 
@@ -609,11 +623,42 @@ class ProductController extends Controller
         }
 
         $availableStock = $product->bundle_available_stock;
-        $isAvailable = $product->is_active && $availableStock !== null && $availableStock > 0;
+        $isAvailable = $product->is_active && ($availableStock === null || $availableStock > 0);
 
         $product->setAttribute('stock', $availableStock ?? 0);
         $product->setAttribute('isAvailable', $isAvailable);
         $product->setAttribute('is_available', $isAvailable);
+    }
+
+    private function applyShiftStockToRelatedProducts(Product $product, $activeShiftStock): void
+    {
+        if ($product->relationLoaded('bundleItems')) {
+            $product->bundleItems->each(function ($item) use ($activeShiftStock) {
+                $component = $item->componentProduct;
+                if (!$component || $component->remaining !== true) {
+                    return;
+                }
+
+                $componentId = (string) $component->id;
+                if ($activeShiftStock->has($componentId)) {
+                    $component->stock = (int) $activeShiftStock->get($componentId);
+                }
+            });
+        }
+
+        if ($product->relationLoaded('modifications')) {
+            $product->modifications->each(function ($modification) use ($activeShiftStock) {
+                $linkedProduct = $modification->linkedProduct;
+                if (!$linkedProduct || $linkedProduct->remaining !== true) {
+                    return;
+                }
+
+                $linkedProductId = (string) $linkedProduct->id;
+                if ($activeShiftStock->has($linkedProductId)) {
+                    $linkedProduct->stock = (int) $activeShiftStock->get($linkedProductId);
+                }
+            });
+        }
     }
 
     private function normalizeProductForResponse(Product $product): array

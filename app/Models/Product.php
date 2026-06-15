@@ -76,6 +76,9 @@ class Product extends Model
                             'name' => $component->name,
                             'price' => (int) $component->price,
                             'stock' => (int) $component->stock,
+                            'remaining' => (bool) $component->remaining,
+                            'is_available' => (bool) $component->is_active
+                                && (! $component->remaining || (int) $component->stock > 0),
                             'is_active' => (bool) $component->is_active,
                         ] : null,
                     ];
@@ -105,6 +108,9 @@ class Product extends Model
                             'name' => $linkedProduct->name,
                             'price' => (int) $linkedProduct->price,
                             'stock' => (int) $linkedProduct->stock,
+                            'remaining' => (bool) $linkedProduct->remaining,
+                            'is_available' => (bool) $linkedProduct->is_active
+                                && (! $linkedProduct->remaining || (int) $linkedProduct->stock > 0),
                             'is_active' => (bool) $linkedProduct->is_active,
                         ] : null,
                     ];
@@ -163,14 +169,20 @@ class Product extends Model
             return null;
         }
 
-        return $this->bundleItems
+        $trackedComponentStocks = $this->bundleItems
+            ->filter(fn ($item) => $item->componentProduct?->remaining === true)
             ->map(function ($item) {
                 $quantity = max(1, (int) $item->quantity);
                 $stock = (int) ($item->componentProduct?->stock ?? 0);
 
                 return intdiv($stock, $quantity);
-            })
-            ->min();
+            });
+
+        if ($trackedComponentStocks->isEmpty()) {
+            return null;
+        }
+
+        return $trackedComponentStocks->min();
     }
 
     public function tenant()
