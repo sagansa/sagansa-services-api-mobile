@@ -657,6 +657,8 @@ class ProductController extends Controller
             'name' => $variant->name,
             'sku' => $variant->sku,
             'price' => (int) ($variant->price ?? 0),
+            'price_adjustment' => (int) ($variant->price ?? 0),
+            'additional_price' => (int) ($variant->price ?? 0),
             'stock' => $variant->stock ?? $variant->stock_quantity ?? null,
             'is_active' => (bool) $variant->is_active,
             'product_variant_group_id' => $variant->product_variant_group_id ?? $groupId,
