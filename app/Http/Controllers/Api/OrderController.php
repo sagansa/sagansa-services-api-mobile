@@ -174,12 +174,7 @@ class OrderController extends Controller
                     );
 
                     if ($channelPrice !== null) {
-                        $variantTotal = 0;
-                        if (! empty($itemData['variant_combination_id'])) {
-                            $variantTotal = (float) (ProductVariantCombination::where('product_id', $itemData['product_id'])
-                                ->where('id', $itemData['variant_combination_id'])
-                                ->value('price') ?? 0);
-                        }
+                        $variantTotal = $this->sumVariantPriceAdjustments($itemData);
 
                         $modificationsTotal = collect($itemData['modifications'] ?? [])
                             ->sum(fn ($modification) => (float) ($modification['price'] ?? 0));
@@ -242,6 +237,9 @@ class OrderController extends Controller
                 'success' => true,
                 'data' => $order->load(['orderItems'])
             ], 201);
+        } catch (\Illuminate\Http\Exceptions\HttpResponseException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Exception $e) {
             DB::rollBack();
             \Illuminate\Support\Facades\Log::error('Order creation failed: ' . $e->getMessage());
@@ -312,6 +310,31 @@ class OrderController extends Controller
         }
 
         return $consumption;
+    }
+
+    private function sumVariantPriceAdjustments(array $itemData): float
+    {
+        $variantSnapshot = $itemData['variant'] ?? [];
+
+        if ($variantSnapshot && ! array_is_list($variantSnapshot)) {
+            $variantSnapshot = [$variantSnapshot];
+        }
+
+        $variantTotal = collect($variantSnapshot)
+            ->filter(fn ($variant) => is_array($variant))
+            ->sum(fn ($variant) => (float) ($variant['price'] ?? 0));
+
+        if ($variantTotal > 0) {
+            return (float) $variantTotal;
+        }
+
+        if (! empty($itemData['product_variant_id'])) {
+            return (float) (ProductVariant::withoutGlobalScope('tenant')
+                ->where('id', $itemData['product_variant_id'])
+                ->value('price') ?? 0);
+        }
+
+        return 0.0;
     }
 
     private function trackedProductsForOrderItem(array $itemData, int $orderQuantity): array

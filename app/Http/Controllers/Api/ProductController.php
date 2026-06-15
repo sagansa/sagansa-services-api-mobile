@@ -198,6 +198,8 @@ class ProductController extends Controller
             $products = $this->applyCustomerTypePrices($products, $storeId, $customerTypeId);
         }
 
+        $products = $products->map(fn ($product) => $this->normalizeProductForResponse($product));
+
         return response()->json([
             'success' => true,
             'data' => $products
@@ -355,7 +357,7 @@ class ProductController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $product
+            'data' => $this->normalizeProductForResponse($product)
         ]);
     }
 
@@ -612,5 +614,53 @@ class ProductController extends Controller
         $product->setAttribute('stock', $availableStock ?? 0);
         $product->setAttribute('isAvailable', $isAvailable);
         $product->setAttribute('is_available', $isAvailable);
+    }
+
+    private function normalizeProductForResponse(Product $product): array
+    {
+        $data = $product->toArray();
+
+        if ($product->relationLoaded('variants')) {
+            $data['variants'] = $product->variants
+                ->map(fn ($variant) => $this->normalizeVariantForResponse($variant))
+                ->values()
+                ->all();
+        }
+
+        if ($product->relationLoaded('variantGroups')) {
+            $data['variant_groups'] = $product->variantGroups
+                ->map(function ($group) {
+                    return [
+                        'id' => $group->id,
+                        'name' => $group->name,
+                        'is_required' => (bool) $group->is_required,
+                        'order' => (int) ($group->order ?? 0),
+                        'variants' => $group->relationLoaded('variants')
+                            ? $group->variants
+                                ->map(fn ($variant) => $this->normalizeVariantForResponse($variant, $group->id))
+                                ->values()
+                                ->all()
+                            : [],
+                    ];
+                })
+                ->values()
+                ->all();
+        }
+
+        return $data;
+    }
+
+    private function normalizeVariantForResponse(ProductVariant $variant, ?string $groupId = null): array
+    {
+        return [
+            'id' => $variant->id,
+            'name' => $variant->name,
+            'sku' => $variant->sku,
+            'price' => (int) ($variant->price ?? 0),
+            'stock' => $variant->stock ?? $variant->stock_quantity ?? null,
+            'is_active' => (bool) $variant->is_active,
+            'product_variant_group_id' => $variant->product_variant_group_id ?? $groupId,
+            'available_with_variants' => $variant->available_with_variants,
+        ];
     }
 }

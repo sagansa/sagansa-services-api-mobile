@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Tenant;
 use App\Models\Store;
 use App\Models\Product;
+use App\Models\PosShiftSession;
+use App\Models\PosShiftStockItem;
 use App\Models\PaymentMethod;
 use App\Models\CustomerType;
 use Illuminate\Http\JsonResponse;
@@ -86,6 +88,16 @@ class PublicController extends Controller
             ], 404);
         }
 
+        $activeShiftStock = collect();
+        $activeShift = PosShiftSession::where('store_id', $storeId)
+            ->where('status', PosShiftSession::STATUS_OPEN)
+            ->first();
+
+        if ($activeShift) {
+            $activeShiftStock = PosShiftStockItem::where('shift_session_id', $activeShift->id)
+                ->pluck('expected_closing_stock', 'product_id');
+        }
+
         $products = Product::withoutGlobalScope('tenant')
             ->whereHas('stores', function($q) use ($storeId) {
                 $q->where('stores.id', $storeId);
@@ -116,13 +128,48 @@ class PublicController extends Controller
                 }
             ])
             ->get()
-            ->map(function($product) {
+            ->map(function($product) use ($activeShiftStock) {
                 $storeProduct = $product->stores->first();
                 $pivot = $storeProduct?->pivot;
                 $storePrice = $pivot?->price;
 
                 if ($storePrice !== null) {
                     $product->price = (int) $storePrice;
+                }
+
+                if ($product->remaining === true) {
+                    $productId = (string) $product->id;
+                    if ($activeShiftStock->has($productId)) {
+                        $product->stock = (int) $activeShiftStock->get($productId);
+                    }
+                }
+
+                if ($product->relationLoaded('bundleItems')) {
+                    $product->bundleItems->each(function ($item) use ($activeShiftStock) {
+                        $component = $item->componentProduct;
+                        if (!$component || $component->remaining !== true) {
+                            return;
+                        }
+
+                        $componentId = (string) $component->id;
+                        if ($activeShiftStock->has($componentId)) {
+                            $component->stock = (int) $activeShiftStock->get($componentId);
+                        }
+                    });
+                }
+
+                if ($product->relationLoaded('modifications')) {
+                    $product->modifications->each(function ($modification) use ($activeShiftStock) {
+                        $linkedProduct = $modification->linkedProduct;
+                        if (!$linkedProduct || $linkedProduct->remaining !== true) {
+                            return;
+                        }
+
+                        $linkedProductId = (string) $linkedProduct->id;
+                        if ($activeShiftStock->has($linkedProductId)) {
+                            $linkedProduct->stock = (int) $activeShiftStock->get($linkedProductId);
+                        }
+                    });
                 }
 
                 $isBundle = ($product->type ?: 'single') === 'bundle';
