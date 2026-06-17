@@ -61,8 +61,28 @@ class OrderController extends Controller
             'order_items.*.notes' => 'nullable|string',
             'is_offline' => 'boolean',
             'device_identifier' => 'nullable|string|max:255',
+            // Offline queue idempotency (PRD pos-offline-first-cache, Phase 7 Step 23).
+            'client_order_id' => 'nullable|uuid',
             'proof_of_payment' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
         ]);
+
+        // Idempotency: if a client_order_id is provided and an order with that
+        // id has already been processed, return the existing order instead of
+        // creating a duplicate. This makes offline order sync safe to retry.
+        if ($request->filled('client_order_id')) {
+            $existing = Order::withoutGlobalScope('tenant')
+                ->where('client_order_id', $request->client_order_id)
+                ->first();
+
+            if ($existing) {
+                return response()->json([
+                    'success' => true,
+                    'data' => $existing->load(['orderItems']),
+                    'idempotent' => true,
+                    'message' => 'Order with this client_order_id already exists.',
+                ], 200);
+            }
+        }
 
         // Verify that the store exists
         // TODO: Add proper cross-tenant access control via user_stores table
@@ -157,6 +177,7 @@ class OrderController extends Controller
                 'source' => $request->source,
                 'is_offline' => $request->is_offline ?? false,
                 'device_identifier' => $request->device_identifier,
+                'client_order_id' => $request->client_order_id, // Offline queue idempotency
                 'proof_of_payment' => $proofOfPaymentPath,
                 'order_type' => $request->order_type,
                 'table_id' => $request->table_id,
