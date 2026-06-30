@@ -53,11 +53,41 @@ class PublicController extends Controller
             $storeColumns[] = 'no_telp';
         }
 
+        // Receipt config fields (logo, header, address) are managed via the
+        // ops app and surfaced here so the customer-facing menu can show the
+        // store logo in its header and offer a WhatsApp contact shortcut.
+        $hasReceiptColumns = Schema::hasColumn('stores', 'email_receipt_logo');
+        if ($hasReceiptColumns) {
+            $storeColumns[] = 'email_receipt_logo';
+        }
+        $hasHeaderColumn = Schema::hasColumn('stores', 'receipt_header');
+        if ($hasHeaderColumn) {
+            $storeColumns[] = 'receipt_header';
+        }
+        $hasAddressColumn = Schema::hasColumn('stores', 'address');
+        if ($hasAddressColumn) {
+            $storeColumns[] = 'address';
+        }
+
+        $imgBaseUrl = rtrim(env('IMG_SERVICE_URL', 'https://img.sagansa.id'), '/');
+
         $stores = Store::withoutGlobalScope('tenant')
             ->where('tenant_id', $tenantId)
             ->where('status', 'active')
             ->select($storeColumns)
-            ->get();
+            ->get()
+            ->map(function ($store) use ($hasReceiptColumns, $imgBaseUrl) {
+                // Resolve the relative logo path to a full URL, matching the
+                // accessor used by the ops app's Store model.
+                if ($hasReceiptColumns && $store->email_receipt_logo) {
+                    $logo = $store->email_receipt_logo;
+                    $store->email_receipt_logo = str_starts_with($logo, 'http')
+                        ? $logo
+                        : "{$imgBaseUrl}/storage/{$logo}";
+                }
+
+                return $store;
+            });
 
         return response()->json([
             'success' => true,

@@ -79,7 +79,7 @@ class PosShiftController extends Controller
             'store_id' => ['required', 'uuid', 'exists:stores,id'],
             'business_date' => ['nullable', 'date'],
             'opening_note' => ['nullable', 'string'],
-            'items' => ['required', 'array'],
+            'items' => ['sometimes', 'array'],
             'items.*.product_id' => ['required', 'uuid', 'exists:products,id'],
             'items.*.opening_stock' => ['required', 'integer', 'min:0'],
             'items.*.opening_variance_note' => ['nullable', 'string'],
@@ -91,7 +91,7 @@ class PosShiftController extends Controller
         $userId = $user?->uuid ?: $user?->id;
 
         $trackedProductIds = $this->trackedProducts($storeId)->pluck('id')->map(fn ($id) => (string) $id)->all();
-        $payloadItems = collect($validated['items'])->keyBy(fn ($item) => (string) $item['product_id']);
+        $payloadItems = collect($validated['items'] ?? [])->keyBy(fn ($item) => (string) $item['product_id']);
 
         $missingProductIds = collect($trackedProductIds)->diff($payloadItems->keys());
         if ($missingProductIds->isNotEmpty()) {
